@@ -357,6 +357,42 @@ fn duplicate_placement(id: String, offset_x: f64, offset_y: f64, state: State<Ap
 }
 
 // =============================================================================
+// MARKUP / ANNOTATIONS
+// =============================================================================
+
+#[tauri::command]
+fn add_markup_note(level: String, x: f64, y: f64, text: String, author: String, state: State<AppState>) -> Result<serde_json::Value, String> {
+    with_doc(&state, |doc| {
+        let id = sed_sdk::markup::add_text_note(doc, &level, x, y, &text, &author)?;
+        Ok(serde_json::json!({ "id": id }))
+    })
+}
+
+#[tauri::command]
+fn add_markup_cloud(level: String, x: f64, y: f64, width: f64, height: f64, text: String, author: String, state: State<AppState>) -> Result<serde_json::Value, String> {
+    with_doc(&state, |doc| {
+        let id = sed_sdk::markup::add_cloud(doc, &level, x, y, width, height, &text, &author)?;
+        Ok(serde_json::json!({ "id": id }))
+    })
+}
+
+#[tauri::command]
+fn add_markup_measurement(level: String, x1: f64, y1: f64, x2: f64, y2: f64, author: String, state: State<AppState>) -> Result<serde_json::Value, String> {
+    with_doc(&state, |doc| {
+        let id = sed_sdk::markup::add_measurement(doc, &level, x1, y1, x2, y2, &author)?;
+        Ok(serde_json::json!({ "id": id }))
+    })
+}
+
+#[tauri::command]
+fn get_markups(level: String, state: State<AppState>) -> Result<serde_json::Value, String> {
+    with_doc(&state, |doc| {
+        let rows = sed_sdk::markup::list_markups(doc, &level)?;
+        Ok(rows_to_json(rows))
+    })
+}
+
+// =============================================================================
 // UNDO / REDO
 // =============================================================================
 
@@ -454,6 +490,8 @@ pub fn run() {
             duplicate_placement,
             // Undo
             undo, redo, undo_info,
+            // Markup
+            add_markup_note, add_markup_cloud, add_markup_measurement, get_markups,
             // CLI
             get_cli_file,
         ])

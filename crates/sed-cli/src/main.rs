@@ -154,6 +154,25 @@ enum Commands {
         #[arg(short, long, default_value = "Level 1")]
         level: String,
     },
+    /// Add a redline note to a .sed file
+    Markup {
+        /// Path to .sed file
+        file: String,
+        /// Note text
+        text: String,
+        /// Level
+        #[arg(short, long, default_value = "Level 1")]
+        level: String,
+        /// Position X (meters)
+        #[arg(long, default_value = "0")]
+        x: f64,
+        /// Position Y (meters)
+        #[arg(long, default_value = "0")]
+        y: f64,
+        /// Author name
+        #[arg(short, long, default_value = "Contractor")]
+        author: String,
+    },
     /// Export all levels as interactive HTML (opens in any browser)
     ViewAll {
         /// Path to .sed file
@@ -228,6 +247,12 @@ fn main() -> Result<()> {
             } else {
                 print!("{}", md);
             }
+            Ok(())
+        }
+        Commands::Markup { file, text, level, x, y, author } => {
+            let doc = SedDocument::open(&file)?;
+            let id = sed_sdk::markup::add_text_note(&doc, &level, x, y, &text, &author)?;
+            println!("Added markup {} at ({}, {}) on {}", id, x, y, level);
             Ok(())
         }
         Commands::View { file, output, level } => {
