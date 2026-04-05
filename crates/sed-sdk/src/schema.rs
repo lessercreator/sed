@@ -314,6 +314,47 @@ pub fn create_schema(conn: &Connection) -> Result<()> {
             properties      TEXT
         );
 
+        -- RFIs
+        CREATE TABLE IF NOT EXISTS rfis (
+            id              TEXT PRIMARY KEY,
+            number          INTEGER NOT NULL,
+            subject         TEXT NOT NULL,
+            question        TEXT NOT NULL,
+            response        TEXT,
+            status          TEXT NOT NULL DEFAULT 'open',  -- open, answered, closed, void
+            priority        TEXT DEFAULT 'normal',         -- urgent, normal, low
+            from_company    TEXT,
+            from_contact    TEXT,
+            to_company      TEXT,
+            to_contact      TEXT,
+            date_submitted  TEXT,
+            date_required   TEXT,
+            date_responded  TEXT,
+            cost_impact     TEXT,       -- 'none', 'tbd', dollar amount
+            schedule_impact TEXT,       -- 'none', 'tbd', days
+            ref_sheet       TEXT,       -- which sheet this references
+            ref_detail      TEXT,       -- specific detail/note
+            ref_element_id  TEXT,       -- UUID of related element
+            ref_element_table TEXT,     -- which table
+            attachments     TEXT,       -- JSON array of attachment IDs
+            properties      TEXT
+        );
+
+        -- Change Orders
+        CREATE TABLE IF NOT EXISTS change_orders (
+            id              TEXT PRIMARY KEY,
+            number          INTEGER NOT NULL,
+            description     TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'pending',  -- pending, approved, rejected, void
+            submitted_by    TEXT,
+            date_submitted  TEXT,
+            date_decided    TEXT,
+            cost_delta      REAL,       -- positive = add, negative = deduct
+            days_delta      INTEGER,    -- schedule impact in days
+            rfi_id          TEXT REFERENCES rfis(id),  -- originating RFI if any
+            properties      TEXT
+        );
+
         -- Spatial index
         CREATE VIRTUAL TABLE IF NOT EXISTS spatial_idx USING rtree(
             id,
