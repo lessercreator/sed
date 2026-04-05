@@ -7,6 +7,7 @@ pub mod examples_office;
 pub mod geometry;
 pub mod undo;
 pub mod validate;
+pub mod diff;
 mod tests;
 mod bug_tests;
 

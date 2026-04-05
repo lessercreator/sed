@@ -58,6 +58,16 @@ enum Commands {
         #[arg(short, long, default_value = "Level 1")]
         level: String,
     },
+    /// Compare two .sed files and show differences
+    Diff {
+        /// Old (baseline) .sed file
+        old: String,
+        /// New (updated) .sed file
+        new: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -71,6 +81,7 @@ fn main() -> Result<()> {
         Commands::Example { output } => cmd_example(&output),
         Commands::Office { output } => cmd_office(&output),
         Commands::ExportPdf { file, output, level } => cmd_export_pdf(&file, &output, &level),
+        Commands::Diff { old, new, json } => cmd_diff(&old, &new, json),
     }
 }
 
@@ -327,5 +338,18 @@ fn cmd_export_pdf(file: &str, output: &str, level: &str) -> Result<()> {
 
     pdf.save(&mut std::io::BufWriter::new(std::fs::File::create(output)?))?;
     println!("Exported: {}", output);
+    Ok(())
+}
+
+fn cmd_diff(old_path: &str, new_path: &str, json: bool) -> Result<()> {
+    let old = SedDocument::open(old_path)?;
+    let new = SedDocument::open(new_path)?;
+    let result = sed_sdk::diff::diff(&old, &new)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        print!("{}", result);
+    }
     Ok(())
 }
