@@ -4,6 +4,7 @@ use sed_sdk::SedDocument;
 use std::collections::BTreeMap;
 
 mod export;
+mod html_export;
 
 #[derive(Parser)]
 #[command(name = "sedtool", about = "Structured Engineering Document — CLI")]
@@ -129,6 +130,17 @@ enum Commands {
         /// Path to .sed file
         file: String,
     },
+    /// Export interactive HTML plan (opens in any browser)
+    View {
+        /// Path to .sed file
+        file: String,
+        /// Output HTML path
+        #[arg(short, long, default_value = "plan.html")]
+        output: String,
+        /// Level
+        #[arg(short, long, default_value = "Level 1")]
+        level: String,
+    },
     /// Create a blank project with the default HVAC equipment catalog
     Catalog {
         /// Output path (default: catalog.sed)
@@ -176,6 +188,11 @@ fn main() -> Result<()> {
         Commands::Ask { file, question } => cmd_ask(&file, &question),
         Commands::Check { file, json } => cmd_check(&file, json),
         Commands::Suggest { file } => cmd_suggest(&file),
+        Commands::View { file, output, level } => {
+            html_export::export_html(&file, &output, &level)?;
+            let _ = open::that(&output);
+            Ok(())
+        }
         Commands::Catalog { output, name, number } => cmd_catalog(&output, &name, &number),
     }
 }
