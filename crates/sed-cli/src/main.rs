@@ -50,7 +50,7 @@ enum Commands {
         #[arg(default_value = "office-tower.sed")]
         output: String,
     },
-    /// Export a .sed file to PDF
+    /// Export a .sed file to PDF (single level)
     ExportPdf {
         /// Path to .sed file
         file: String,
@@ -60,6 +60,14 @@ enum Commands {
         /// Level to export (default: Level 1)
         #[arg(short, long, default_value = "Level 1")]
         level: String,
+    },
+    /// Export all plan sheets + equipment schedule to a single PDF
+    ExportPdfAll {
+        /// Path to .sed file
+        file: String,
+        /// Output PDF path
+        #[arg(short, long, default_value = "output.pdf")]
+        output: String,
     },
     /// Compare two .sed files and show differences
     Diff {
@@ -153,6 +161,7 @@ fn main() -> Result<()> {
         Commands::Example { output } => cmd_example(&output),
         Commands::Office { output } => cmd_office(&output),
         Commands::ExportPdf { file, output, level } => export::export_pdf(&file, &output, &level),
+        Commands::ExportPdfAll { file, output } => export::export_pdf_all(&file, &output),
         Commands::Diff { old, new, json } => cmd_diff(&old, &new, json),
         Commands::Stats { file } => cmd_stats(&file),
         Commands::ExportSchedule { file, output, schedule_type } => {

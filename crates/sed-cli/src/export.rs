@@ -9,10 +9,89 @@ const BORDER: f32 = 12.7;    // 1/2" border
 const TB_W: f32 = 190.0;     // title block width
 const TB_H: f32 = 76.0;      // title block height
 
+// Equipment schedule table column widths (mm)
+const COL_TAG: f32 = 25.0;
+const COL_CATEGORY: f32 = 35.0;
+const COL_MFR: f32 = 35.0;
+const COL_MODEL: f32 = 35.0;
+const COL_CFM: f32 = 20.0;
+const COL_STATUS: f32 = 20.0;
+const COL_LEVEL: f32 = 25.0;
+const COL_ROOM: f32 = 30.0;
+
+const SCHEDULE_COLS: [(&str, f32); 8] = [
+    ("Tag", COL_TAG),
+    ("Category", COL_CATEGORY),
+    ("Manufacturer", COL_MFR),
+    ("Model", COL_MODEL),
+    ("CFM", COL_CFM),
+    ("Status", COL_STATUS),
+    ("Level", COL_LEVEL),
+    ("Room", COL_ROOM),
+];
+
+const ROWS_PER_SCHEDULE_PAGE: usize = 40;
+
 pub fn export_pdf(file: &str, output: &str, level: &str) -> Result<()> {
     let doc = SedDocument::open(file)?;
     let info = doc.info()?;
-    let rooms = sed_sdk::geometry::get_room_geometry(&doc, level)?;
+
+    let pdf = PdfDocument::empty(&format!("{} — {}", info.project_name, level));
+    let font = pdf.add_builtin_font(BuiltinFont::Helvetica).unwrap();
+    let font_bold = pdf.add_builtin_font(BuiltinFont::HelveticaBold).unwrap();
+
+    render_plan_page(&pdf, &doc, &info, level, &font, &font_bold)?;
+
+    pdf.save(&mut std::io::BufWriter::new(std::fs::File::create(output)?))?;
+    println!("Exported: {}", output);
+    Ok(())
+}
+
+pub fn export_pdf_all(file: &str, output: &str) -> Result<()> {
+    let doc = SedDocument::open(file)?;
+    let info = doc.info()?;
+
+    // Find all sheets that have a plan view, get the level from the view
+    let plan_views = doc.query_raw(
+        "SELECT DISTINCT v.level, s.number, s.title
+         FROM views v
+         JOIN sheets s ON v.sheet_id = s.id
+         WHERE v.view_type = 'plan' AND v.level IS NOT NULL
+         ORDER BY s.number"
+    )?;
+
+    if plan_views.is_empty() {
+        anyhow::bail!("No plan views found in sheets table");
+    }
+
+    let pdf = PdfDocument::empty(&info.project_name);
+    let font = pdf.add_builtin_font(BuiltinFont::Helvetica).unwrap();
+    let font_bold = pdf.add_builtin_font(BuiltinFont::HelveticaBold).unwrap();
+
+    // Render each plan level as a page
+    for view in &plan_views {
+        let level = &view[0].1;
+        if level == "NULL" { continue; }
+        render_plan_page(&pdf, &doc, &info, level, &font, &font_bold)?;
+    }
+
+    // Render equipment schedule page(s) at the end
+    render_schedule_pages(&pdf, &doc, &font, &font_bold)?;
+
+    pdf.save(&mut std::io::BufWriter::new(std::fs::File::create(output)?))?;
+    println!("Exported: {} ({} plan pages + equipment schedule)", output, plan_views.len());
+    Ok(())
+}
+
+fn render_plan_page(
+    pdf: &PdfDocumentReference,
+    doc: &SedDocument,
+    info: &sed_sdk::document::DocumentInfo,
+    level: &str,
+    font: &IndirectFontRef,
+    font_bold: &IndirectFontRef,
+) -> Result<()> {
+    let rooms = sed_sdk::geometry::get_room_geometry(doc, level)?;
 
     let placements = doc.query_params(
         "SELECT pt.tag, pt.category, pt.domain, p.x, p.y, p.cfm, p.instance_tag, p.status
@@ -38,11 +117,8 @@ pub fn export_pdf(file: &str, output: &str, level: &str) -> Result<()> {
     let sheet_num = sheet_rows.first().map(|r| r[0].1.as_str()).unwrap_or("M-100");
     let sheet_title = sheet_rows.first().map(|r| r[1].1.as_str()).unwrap_or(level);
 
-    let pdf = PdfDocument::empty(&format!("{} — {}", info.project_name, sheet_title));
     let (page_idx, layer_idx) = pdf.add_page(Mm(SHEET_W), Mm(SHEET_H), sheet_title);
     let layer = pdf.get_page(page_idx).get_layer(layer_idx);
-    let font = pdf.add_builtin_font(BuiltinFont::Helvetica).unwrap();
-    let font_bold = pdf.add_builtin_font(BuiltinFont::HelveticaBold).unwrap();
 
     // =========================================================================
     // SHEET BORDER
@@ -335,11 +411,186 @@ pub fn export_pdf(file: &str, output: &str, level: &str) -> Result<()> {
         layer.use_text(&label, 3.5, Mm(ptx.0 + r + 1.0), Mm(pty.0 + 0.5), &font);
     }
 
-    // =========================================================================
-    // SAVE
-    // =========================================================================
-    pdf.save(&mut std::io::BufWriter::new(std::fs::File::create(output)?))?;
-    println!("Exported: {} (sheet {})", output, sheet_num);
+    println!("  Rendered plan page: {} ({})", sheet_title, sheet_num);
+    Ok(())
+}
+
+/// Render equipment schedule table pages into the PDF document.
+fn render_schedule_pages(
+    pdf: &PdfDocumentReference,
+    doc: &SedDocument,
+    font: &IndirectFontRef,
+    font_bold: &IndirectFontRef,
+) -> Result<()> {
+    let rows = doc.query_raw(
+        "SELECT COALESCE(p.instance_tag, pt.tag) as tag, pt.category, pt.manufacturer,
+                pt.model, p.cfm, p.status, p.level, s.name as room
+         FROM placements p
+         JOIN product_types pt ON p.product_type_id = pt.id
+         LEFT JOIN spaces s ON p.space_id = s.id
+         ORDER BY p.level, pt.tag"
+    )?;
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    // Paginate
+    let chunks: Vec<&[Vec<(String, String)>]> = rows.chunks(ROWS_PER_SCHEDULE_PAGE).collect();
+
+    for (page_num, chunk) in chunks.iter().enumerate() {
+        let page_label = if chunks.len() == 1 {
+            "EQUIPMENT SCHEDULE".to_string()
+        } else {
+            format!("EQUIPMENT SCHEDULE (Page {} of {})", page_num + 1, chunks.len())
+        };
+
+        let (page_idx, layer_idx) = pdf.add_page(Mm(SHEET_W), Mm(SHEET_H), &page_label);
+        let layer = pdf.get_page(page_idx).get_layer(layer_idx);
+
+        // Sheet border
+        layer.set_outline_color(Color::Greyscale(Greyscale::new(0.0, None)));
+        layer.set_outline_thickness(0.75);
+        layer.add_line(Line {
+            points: vec![
+                (Point::new(Mm(BORDER), Mm(BORDER)), false),
+                (Point::new(Mm(SHEET_W - BORDER), Mm(BORDER)), false),
+                (Point::new(Mm(SHEET_W - BORDER), Mm(SHEET_H - BORDER)), false),
+                (Point::new(Mm(BORDER), Mm(SHEET_H - BORDER)), false),
+            ],
+            is_closed: true,
+        });
+
+        // Title
+        let title_y = SHEET_H - BORDER - 15.0;
+        layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
+        layer.use_text(&page_label, 14.0, Mm(BORDER + 10.0), Mm(title_y), font_bold);
+
+        // Table layout
+        let table_x = BORDER + 10.0;
+        let table_top = title_y - 10.0;
+        let row_height: f32 = 6.0;
+        let header_height: f32 = 8.0;
+        let total_width: f32 = SCHEDULE_COLS.iter().map(|(_, w)| w).sum();
+
+        // Header background
+        layer.set_fill_color(Color::Greyscale(Greyscale::new(0.85, None)));
+        layer.set_outline_thickness(0.0);
+        layer.add_polygon(Polygon {
+            rings: vec![vec![
+                (Point::new(Mm(table_x), Mm(table_top - header_height)), false),
+                (Point::new(Mm(table_x + total_width), Mm(table_top - header_height)), false),
+                (Point::new(Mm(table_x + total_width), Mm(table_top)), false),
+                (Point::new(Mm(table_x), Mm(table_top)), false),
+            ]],
+            mode: path::PaintMode::Fill,
+            winding_order: path::WindingOrder::NonZero,
+        });
+
+        // Header text
+        layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
+        let mut col_x = table_x;
+        for (name, width) in &SCHEDULE_COLS {
+            layer.use_text(*name, 8.0, Mm(col_x + 1.0), Mm(table_top - 6.0), font_bold);
+            col_x += width;
+        }
+
+        // Header bottom line
+        layer.set_outline_color(Color::Greyscale(Greyscale::new(0.0, None)));
+        layer.set_outline_thickness(0.5);
+        layer.add_line(Line {
+            points: vec![
+                (Point::new(Mm(table_x), Mm(table_top - header_height)), false),
+                (Point::new(Mm(table_x + total_width), Mm(table_top - header_height)), false),
+            ],
+            is_closed: false,
+        });
+
+        // Data rows
+        let data_top = table_top - header_height;
+
+        for (row_idx, row) in chunk.iter().enumerate() {
+            let row_y = data_top - (row_idx as f32 + 1.0) * row_height;
+
+            // Alternate row background
+            if row_idx % 2 == 0 {
+                layer.set_fill_color(Color::Greyscale(Greyscale::new(0.95, None)));
+                layer.set_outline_thickness(0.0);
+                layer.add_polygon(Polygon {
+                    rings: vec![vec![
+                        (Point::new(Mm(table_x), Mm(row_y)), false),
+                        (Point::new(Mm(table_x + total_width), Mm(row_y)), false),
+                        (Point::new(Mm(table_x + total_width), Mm(row_y + row_height)), false),
+                        (Point::new(Mm(table_x), Mm(row_y + row_height)), false),
+                    ]],
+                    mode: path::PaintMode::Fill,
+                    winding_order: path::WindingOrder::NonZero,
+                });
+            }
+
+            // Row text
+            layer.set_fill_color(Color::Greyscale(Greyscale::new(0.1, None)));
+            let mut col_x = table_x;
+            for (col_idx, (_, width)) in SCHEDULE_COLS.iter().enumerate() {
+                let val = if col_idx < row.len() {
+                    let v = &row[col_idx].1;
+                    if v == "NULL" { "" } else { v.as_str() }
+                } else {
+                    ""
+                };
+                // Truncate if too long for column
+                let max_chars = (*width as usize * 2 / 3).max(4);
+                let display = if val.len() > max_chars {
+                    &val[..max_chars]
+                } else {
+                    val
+                };
+                layer.use_text(display, 7.0, Mm(col_x + 1.0), Mm(row_y + 1.5), font);
+                col_x += width;
+            }
+        }
+
+        // Table outer border
+        let table_bottom = data_top - (chunk.len() as f32) * row_height;
+        layer.set_outline_color(Color::Greyscale(Greyscale::new(0.3, None)));
+        layer.set_outline_thickness(0.3);
+        layer.add_line(Line {
+            points: vec![
+                (Point::new(Mm(table_x), Mm(table_bottom)), false),
+                (Point::new(Mm(table_x + total_width), Mm(table_bottom)), false),
+                (Point::new(Mm(table_x + total_width), Mm(table_top)), false),
+                (Point::new(Mm(table_x), Mm(table_top)), false),
+            ],
+            is_closed: true,
+        });
+
+        // Vertical column dividers
+        layer.set_outline_thickness(0.15);
+        let mut col_x = table_x;
+        for (_, width) in &SCHEDULE_COLS {
+            col_x += width;
+            if col_x < table_x + total_width {
+                layer.add_line(Line {
+                    points: vec![
+                        (Point::new(Mm(col_x), Mm(table_bottom)), false),
+                        (Point::new(Mm(col_x), Mm(table_top)), false),
+                    ],
+                    is_closed: false,
+                });
+            }
+        }
+
+        // Row count footer
+        layer.set_fill_color(Color::Greyscale(Greyscale::new(0.4, None)));
+        layer.use_text(
+            &format!("{} items total", rows.len()),
+            6.0,
+            Mm(table_x),
+            Mm(table_bottom - 5.0),
+            font,
+        );
+    }
+
     Ok(())
 }
 

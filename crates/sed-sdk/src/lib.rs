@@ -14,6 +14,7 @@ pub mod clipboard;
 pub mod autosize;
 pub mod suggest;
 pub mod design_check;
+pub mod pipe_size;
 pub mod catalog;
 mod tests;
 mod bug_tests;
