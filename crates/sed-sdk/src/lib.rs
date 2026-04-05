@@ -8,6 +8,7 @@ pub mod geometry;
 pub mod undo;
 pub mod validate;
 pub mod diff;
+pub mod import;
 mod tests;
 mod bug_tests;
 

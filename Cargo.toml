@@ -15,3 +15,4 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 printpdf = "0.7"
+csv = "1"

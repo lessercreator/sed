@@ -14,3 +14,4 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 printpdf = { workspace = true }
+csv = { workspace = true }

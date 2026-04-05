@@ -68,6 +68,20 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Import a CSV equipment schedule into a .sed file
+    ImportCsv {
+        /// CSV file to import
+        csv: String,
+        /// Output .sed file path
+        #[arg(short, long, default_value = "imported.sed")]
+        output: String,
+        /// Project name
+        #[arg(short, long, default_value = "Imported Project")]
+        name: String,
+        /// Project number
+        #[arg(short = 'N', long, default_value = "IMP-001")]
+        number: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -82,6 +96,7 @@ fn main() -> Result<()> {
         Commands::Office { output } => cmd_office(&output),
         Commands::ExportPdf { file, output, level } => cmd_export_pdf(&file, &output, &level),
         Commands::Diff { old, new, json } => cmd_diff(&old, &new, json),
+        Commands::ImportCsv { csv, output, name, number } => cmd_import_csv(&csv, &output, &name, &number),
     }
 }
 
@@ -351,5 +366,17 @@ fn cmd_diff(old_path: &str, new_path: &str, json: bool) -> Result<()> {
     } else {
         print!("{}", result);
     }
+    Ok(())
+}
+
+fn cmd_import_csv(csv_path: &str, output: &str, name: &str, number: &str) -> Result<()> {
+    println!("Importing: {} -> {}", csv_path, output);
+    let mapping = sed_sdk::import::ColumnMapping::default();
+    let result = sed_sdk::import::import_csv(csv_path, output, name, number, &mapping)?;
+    print!("{}", result);
+
+    let doc = SedDocument::open(output)?;
+    let info = doc.info()?;
+    print!("\n{}", info);
     Ok(())
 }
