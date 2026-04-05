@@ -301,6 +301,13 @@ impl SedDocument {
         Ok(())
     }
 
+    pub fn update_node_position(&self, id: &str, x: f64, y: f64) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE nodes SET x = ?1, y = ?2 WHERE id = ?3",
+            rusqlite::params![x, y, id],
+        )?)
+    }
+
     // =========================================================================
     // SEGMENTS
     // =========================================================================
@@ -374,6 +381,18 @@ impl SedDocument {
             "INSERT INTO general_notes (id, discipline, text, sort_order)
              VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![id, discipline, text, sort_order],
+        )?;
+        Ok(())
+    }
+
+    // =========================================================================
+    // GEOMETRY
+    // =========================================================================
+
+    pub fn create_polygon(&self, id: &str, vertices: &[u8], vertex_count: i32, level: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO geometry_polygons (id, vertices, vertex_count, level) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, vertices, vertex_count, level],
         )?;
         Ok(())
     }
