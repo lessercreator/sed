@@ -75,6 +75,12 @@ const equipPlace = {
 
 let animFrameId = null;
 
+const SNAP_GRID = 0.25; // 25cm snap grid (approximately 1 foot = 0.3048m)
+
+function snap(v) {
+    return Math.round(v / SNAP_GRID) * SNAP_GRID;
+}
+
 // =============================================================================
 // BOOT
 // =============================================================================
@@ -268,6 +274,25 @@ function buildDevicesTab() {
 function buildCatalogTab() {
     const container = document.getElementById('tab-catalog');
     container.innerHTML = '';
+
+    // "New Product Type" button
+    const addBtn = el('div', 'item');
+    addBtn.style.color = 'var(--accent)';
+    addBtn.style.justifyContent = 'center';
+    addBtn.style.fontWeight = '600';
+    addBtn.innerHTML = '+ New Product Type';
+    addBtn.onclick = async () => {
+        const tag = prompt('Product type tag (e.g. LD-1, AHU, VAV):');
+        if (!tag) return;
+        const domain = prompt('Domain (equipment, air_device, accessory):', 'air_device') || 'air_device';
+        const category = prompt('Category (supply_diffuser, rtu, vav_box, exhaust_fan, etc.):') || 'air_device';
+        const manufacturer = prompt('Manufacturer:') || null;
+        const model = prompt('Model:') || null;
+        await invoke('create_product_type', { tag, domain, category, manufacturer, model, description: null });
+        await reloadAfterMutation();
+    };
+    container.appendChild(addBtn);
+
     const byDomain = {};
     state.productTypes.forEach(pt => {
         const d = pt.domain || 'other';
@@ -617,15 +642,15 @@ function onCanvasMouseDown(e) {
             closeProps();
         }
     } else if (state.activeTool === 'room') {
-        roomDraw.vertices.push({ x: mouse.worldX, y: mouse.worldY });
+        roomDraw.vertices.push({ x: snap(mouse.worldX), y: snap(mouse.worldY) });
         roomDraw.active = true;
         state.dirty = true;
     } else if (state.activeTool === 'equip') {
-        equipPlace.worldX = mouse.worldX;
-        equipPlace.worldY = mouse.worldY;
+        equipPlace.worldX = snap(mouse.worldX);
+        equipPlace.worldY = snap(mouse.worldY);
         showEquipmentPicker(e.clientX, e.clientY);
     } else if (state.activeTool === 'duct') {
-        handleDuctClick(mouse.worldX, mouse.worldY);
+        handleDuctClick(snap(mouse.worldX), snap(mouse.worldY));
     }
 }
 
@@ -663,8 +688,8 @@ function onCanvasMouseUp(e) {
     if (mouse.draggingElement) {
         const elem = mouse.draggingElement.element;
         const table = mouse.draggingElement.table;
-        const x = parseFloat(elem.x || 0);
-        const y = parseFloat(elem.y || 0);
+        const x = snap(parseFloat(elem.x || 0));
+        const y = snap(parseFloat(elem.y || 0));
         invoke('move_element', { table, id: elem.id, x, y }).then(() => reloadAfterMutation());
         mouse.draggingElement = null;
     }
@@ -1060,8 +1085,8 @@ function drawRooms(ctx) {
 function drawSegments(ctx) {
     const segs = state.graph.segments || [];
     segs.forEach(seg => {
-        const x1 = parseFloat(seg.x), y1 = parseFloat(seg.y);
-        const x2 = parseFloat(seg['x:1'] || seg.x_1), y2 = parseFloat(seg['y:1'] || seg.y_1);
+        const x1 = parseFloat(seg.x1), y1 = parseFloat(seg.y1);
+        const x2 = parseFloat(seg.x2), y2 = parseFloat(seg.y2);
         if (isNaN(x1) || isNaN(y1) || isNaN(x2) || isNaN(y2)) return;
 
         const diam = parseFloat(seg.diameter_m) || 0.2;

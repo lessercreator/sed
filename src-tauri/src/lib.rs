@@ -140,7 +140,7 @@ fn get_graph(level: String, system_tag: Option<String>, state: State<AppState>) 
              FROM nodes n JOIN systems sys ON n.system_id = sys.id WHERE n.level = ?1"
         );
         let mut seg_sql = String::from(
-            "SELECT seg.id, n1.x, n1.y, n2.x, n2.y, seg.shape, seg.diameter_m, seg.width_m, seg.flow_design, sys.tag as system_tag
+            "SELECT seg.id, n1.x as x1, n1.y as y1, n2.x as x2, n2.y as y2, seg.shape, seg.diameter_m, seg.width_m, seg.flow_design, sys.tag as system_tag
              FROM segments seg
              JOIN nodes n1 ON seg.from_node_id = n1.id
              JOIN nodes n2 ON seg.to_node_id = n2.id
