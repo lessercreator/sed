@@ -416,6 +416,18 @@ fn rows_to_json(rows: Vec<Vec<(String, String)>>) -> serde_json::Value {
 // APP
 // =============================================================================
 
+#[tauri::command]
+fn get_cli_file() -> Result<Option<String>, String> {
+    let args: Vec<String> = std::env::args().collect();
+    // Check if a .sed file was passed as argument (e.g., double-click in Explorer)
+    for arg in args.iter().skip(1) {
+        if arg.ends_with(".sed") && std::path::Path::new(arg).exists() {
+            return Ok(Some(arg.clone()));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -442,6 +454,8 @@ pub fn run() {
             duplicate_placement,
             // Undo
             undo, redo, undo_info,
+            // CLI
+            get_cli_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running SED Editor");

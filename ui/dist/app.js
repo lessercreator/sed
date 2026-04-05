@@ -144,6 +144,17 @@ document.getElementById('btn-example').addEventListener('click', async () => {
     await loadDocument();
 });
 
+// Auto-open file passed via command line (e.g., double-click in Explorer)
+(async () => {
+    try {
+        const cliFile = await invoke('get_cli_file');
+        if (cliFile) {
+            state.info = await invoke('open_file', { path: cliFile });
+            await loadDocument();
+        }
+    } catch (e) { /* no CLI file, show welcome screen */ }
+})();
+
 // =============================================================================
 // LOAD DOCUMENT
 // =============================================================================
