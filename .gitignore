@@ -1,0 +1,5 @@
+/target/
+*.sed
+*.sed-shm
+*.sed-wal
+*.sed-journal

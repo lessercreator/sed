@@ -1,0 +1,15 @@
+[package]
+name = "sed-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Structured Engineering Document — CLI tool"
+
+[[bin]]
+name = "sedtool"
+path = "src/main.rs"
+
+[dependencies]
+sed-sdk = { path = "../sed-sdk" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
