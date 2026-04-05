@@ -10,6 +10,7 @@ pub mod validate;
 pub mod diff;
 pub mod import;
 pub mod nlq;
+pub mod clipboard;
 mod tests;
 mod bug_tests;
 

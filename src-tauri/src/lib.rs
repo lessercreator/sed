@@ -345,6 +345,18 @@ fn move_element(table: String, id: String, x: f64, y: f64, state: State<AppState
 }
 
 // =============================================================================
+// DUPLICATE
+// =============================================================================
+
+#[tauri::command]
+fn duplicate_placement(id: String, offset_x: f64, offset_y: f64, state: State<AppState>) -> Result<serde_json::Value, String> {
+    with_doc(&state, |doc| {
+        let new_id = sed_sdk::clipboard::duplicate_placement(doc, &id, offset_x, offset_y)?;
+        Ok(serde_json::json!({ "id": new_id }))
+    })
+}
+
+// =============================================================================
 // UNDO / REDO
 // =============================================================================
 
@@ -425,8 +437,9 @@ pub fn run() {
             create_system, create_node, create_segment,
             // Update
             update_element, move_element,
-            // Delete
+            // Delete / Duplicate
             delete_element,
+            duplicate_placement,
             // Undo
             undo, redo, undo_info,
         ])
