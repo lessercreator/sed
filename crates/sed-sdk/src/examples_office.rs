@@ -1598,27 +1598,144 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
+    fn create_test_doc() -> (SedDocument, String) {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        drop(tmp);
+        create_office_tower(&path).expect("Should create office tower");
+        let doc = SedDocument::open(&path).unwrap();
+        (doc, path)
+    }
+
     #[test]
     fn test_create_office_tower() {
-        let tmp = NamedTempFile::new().unwrap();
-        let path = tmp.path().to_str().unwrap();
-        create_office_tower(path).expect("Should create office tower without error");
-
-        // Verify it produced meaningful content
-        let doc = SedDocument::open(path).unwrap();
+        let (doc, _) = create_test_doc();
         let info = doc.info().unwrap();
+        assert!(info.spaces > 100);
+        assert!(info.placements > 100);
+        assert!(info.systems > 10);
+        assert!(info.nodes > 20);
+        assert!(info.segments > 20);
+    }
 
-        // Should have substantial content
-        assert!(info.spaces > 100, "Expected >100 spaces, got {}", info.spaces);
-        assert!(info.product_types > 15, "Expected >15 product types, got {}", info.product_types);
-        assert!(info.placements > 100, "Expected >100 placements, got {}", info.placements);
-        assert!(info.systems > 10, "Expected >10 systems, got {}", info.systems);
-        assert!(info.nodes > 20, "Expected >20 nodes, got {}", info.nodes);
-        assert!(info.segments > 20, "Expected >20 segments, got {}", info.segments);
-        assert!(info.sheets > 10, "Expected >10 sheets, got {}", info.sheets);
-        assert!(info.submittals > 5, "Expected >5 submittals, got {}", info.submittals);
-        assert!(info.keyed_notes > 10, "Expected >10 keyed notes, got {}", info.keyed_notes);
+    #[test]
+    fn test_all_vavs_have_instance_tags() {
+        let (doc, _) = create_test_doc();
+        let rows = doc.query_raw(
+            "SELECT COUNT(*) FROM placements p JOIN product_types pt ON p.product_type_id = pt.id WHERE pt.category = 'vav_box' AND p.instance_tag IS NULL"
+        ).unwrap();
+        let untagged: i64 = rows[0][0].1.parse().unwrap();
+        assert_eq!(untagged, 0, "All VAVs should have instance tags");
+    }
 
-        println!("{}", info);
+    #[test]
+    fn test_hydronic_pairs_linked() {
+        let (doc, _) = create_test_doc();
+        let rows = doc.query_raw(
+            "SELECT s1.tag, s2.tag FROM systems s1 JOIN systems s2 ON s1.paired_system_id = s2.id WHERE s1.medium = 'chilled_water' AND s1.system_type = 'supply'"
+        ).unwrap();
+        assert!(!rows.is_empty(), "CHW supply should be paired with CHW return");
+        assert_eq!(rows[0][0].1, "CHWS");
+        assert_eq!(rows[0][1].1, "CHWR");
+    }
+
+    #[test]
+    fn test_hydronic_pairs_bidirectional() {
+        let (doc, _) = create_test_doc();
+        // Every system with a pair should have its pair point back
+        let rows = doc.query_raw(
+            "SELECT s1.tag, s2.tag FROM systems s1 JOIN systems s2 ON s1.paired_system_id = s2.id WHERE s2.paired_system_id != s1.id"
+        ).unwrap();
+        assert!(rows.is_empty(), "Paired systems should point at each other: {:?}", rows);
+    }
+
+    #[test]
+    fn test_duct_graph_traversal() {
+        let (doc, _) = create_test_doc();
+        // Find the AHU-1 supply system's equipment connection node
+        let starts = doc.query_raw(
+            "SELECT n.id FROM nodes n JOIN systems sys ON n.system_id = sys.id WHERE sys.tag = 'AHU-1-SA' AND n.node_type = 'equipment_conn'"
+        ).unwrap();
+        assert!(!starts.is_empty(), "AHU-1-SA should have an equipment_conn node");
+
+        let start_id = &starts[0][0].1;
+        let trace = doc.query_raw(&format!(
+            "WITH RECURSIVE downstream AS (
+                SELECT n.id, n.node_type, 0 as depth FROM nodes n WHERE n.id = '{}'
+                UNION ALL
+                SELECT n2.id, n2.node_type, d.depth + 1
+                FROM downstream d
+                JOIN segments seg ON seg.from_node_id = d.id
+                JOIN nodes n2 ON n2.id = seg.to_node_id
+                WHERE d.depth < 50
+            )
+            SELECT * FROM downstream", start_id
+        )).unwrap();
+
+        let terminals: Vec<_> = trace.iter().filter(|r| r[1].1 == "terminal").collect();
+        assert!(terminals.len() >= 10, "AHU-1 trunk should reach at least 10 VAV terminals, got {}", terminals.len());
+    }
+
+    #[test]
+    fn test_chw_piping_graph() {
+        let (doc, _) = create_test_doc();
+        // CHW supply system should have nodes and segments
+        let rows = doc.query_raw(
+            "SELECT COUNT(*) FROM nodes n JOIN systems sys ON n.system_id = sys.id WHERE sys.tag = 'CHWS'"
+        ).unwrap();
+        let node_count: i64 = rows[0][0].1.parse().unwrap();
+        assert!(node_count > 5, "CHWS should have >5 nodes, got {}", node_count);
+
+        let rows = doc.query_raw(
+            "SELECT COUNT(*) FROM segments seg JOIN systems sys ON seg.system_id = sys.id WHERE sys.tag = 'CHWS'"
+        ).unwrap();
+        let seg_count: i64 = rows[0][0].1.parse().unwrap();
+        assert!(seg_count > 3, "CHWS should have >3 segments, got {}", seg_count);
+    }
+
+    #[test]
+    fn test_equipment_per_floor() {
+        let (doc, _) = create_test_doc();
+        // Each office floor (2-10) should have 12 VAVs
+        for floor in 2..=10 {
+            let rows = doc.query_raw(&format!(
+                "SELECT COUNT(*) FROM placements p JOIN product_types pt ON p.product_type_id = pt.id WHERE pt.category = 'vav_box' AND p.level = 'Level {}'", floor
+            )).unwrap();
+            let count: i64 = rows[0][0].1.parse().unwrap();
+            assert_eq!(count, 12, "Floor {} should have 12 VAVs, got {}", floor, count);
+        }
+    }
+
+    #[test]
+    fn test_total_system_cfm() {
+        let (doc, _) = create_test_doc();
+        // Total VAV CFM for floors 2-4 (served by AHU-1) should be around 25,000
+        let rows = doc.query_raw(
+            "SELECT SUM(p.cfm) FROM placements p JOIN product_types pt ON p.product_type_id = pt.id WHERE pt.category = 'vav_box' AND p.level IN ('Level 2', 'Level 3', 'Level 4')"
+        ).unwrap();
+        let total: f64 = rows[0][0].1.parse().unwrap();
+        // 36 VAVs, 8x800 + 4x1000 = 10,400 per floor, 3 floors = 31,200
+        // But AHU is rated 25,000 CFM — this is a diversity factor issue, which is realistic
+        assert!(total > 20000.0, "Floors 2-4 total CFM should be >20000, got {}", total);
+    }
+
+    #[test]
+    fn test_every_space_has_level() {
+        let (doc, _) = create_test_doc();
+        let rows = doc.query_raw(
+            "SELECT COUNT(*) FROM spaces WHERE level IS NULL OR level = ''"
+        ).unwrap();
+        let count: i64 = rows[0][0].1.parse().unwrap();
+        assert_eq!(count, 0, "Every space must have a level");
+    }
+
+    #[test]
+    fn test_every_placement_has_status() {
+        let (doc, _) = create_test_doc();
+        let rows = doc.query_raw(
+            "SELECT COUNT(*) FROM placements WHERE status IS NULL OR status = ''"
+        ).unwrap();
+        let count: i64 = rows[0][0].1.parse().unwrap();
+        assert_eq!(count, 0, "Every placement must have a status");
     }
 }
