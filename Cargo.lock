@@ -3358,6 +3358,7 @@ name = "sed-editor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rusqlite",
  "sed-sdk",
  "serde",
  "serde_json",

@@ -8,20 +8,33 @@
 </head>
 <body>
 <div id="app">
-    <!-- Welcome screen (shown when no file is open) -->
     <div id="welcome">
         <div class="welcome-inner">
             <h1>SED</h1>
             <p>Structured Engineering Document</p>
             <div class="welcome-actions">
-                <button class="btn primary" id="btn-open">Open .sed file</button>
+                <button class="btn primary" id="btn-new">New Project</button>
+                <button class="btn" id="btn-open">Open File</button>
                 <button class="btn" id="btn-example">Load SKIMS Americana Example</button>
             </div>
         </div>
     </div>
 
-    <!-- Editor (shown when file is open) -->
-    <div id="editor" style="display:none">
+    <div id="new-project-dialog" class="dialog-overlay">
+        <div class="dialog">
+            <h3>New Project</h3>
+            <label>Project Name</label>
+            <input type="text" id="np-name" placeholder="My Building Project">
+            <label>Project Number</label>
+            <input type="text" id="np-number" placeholder="25-001">
+            <div class="dialog-actions">
+                <button class="btn" id="np-cancel">Cancel</button>
+                <button class="btn primary" id="np-create">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="editor" class="hidden">
         <div id="sidebar">
             <div id="sidebar-header">
                 <div class="brand">SED</div>
@@ -31,35 +44,71 @@
             <div id="tabs">
                 <div class="tab active" data-tab="spaces">Spaces</div>
                 <div class="tab" data-tab="devices">Devices</div>
-                <div class="tab" data-tab="submittals">Submittals</div>
-                <div class="tab" data-tab="notes">Notes</div>
+                <div class="tab" data-tab="catalog">Catalog</div>
+                <div class="tab" data-tab="systems">Systems</div>
             </div>
             <div id="tab-spaces" class="tab-content active"></div>
             <div id="tab-devices" class="tab-content"></div>
-            <div id="tab-submittals" class="tab-content"></div>
-            <div id="tab-notes" class="tab-content"></div>
+            <div id="tab-catalog" class="tab-content"></div>
+            <div id="tab-systems" class="tab-content"></div>
         </div>
 
         <div id="main">
             <div id="toolbar">
-                <label>Level:</label>
-                <select id="level-select"></select>
+                <div class="toolbar-group">
+                    <label>Level:</label>
+                    <select id="level-select"></select>
+                </div>
                 <div class="sep"></div>
-                <button class="tool-btn" id="btn-sql">SQL</button>
-                <button class="tool-btn" id="btn-fit">Fit</button>
+                <div class="toolbar-group tools">
+                    <button class="tool-btn active" data-tool="select" title="Select (S)">
+                        <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 1l5 12 2-5 5-2z" fill="currentColor"/></svg>
+                        Select
+                    </button>
+                    <button class="tool-btn" data-tool="room" title="Draw Room (R)">
+                        <svg width="14" height="14" viewBox="0 0 14 14"><rect x="1" y="1" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                        Room
+                    </button>
+                    <button class="tool-btn" data-tool="equip" title="Place Equipment (E)">
+                        <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="4" x2="7" y2="10" stroke="currentColor" stroke-width="1.5"/><line x1="4" y1="7" x2="10" y2="7" stroke="currentColor" stroke-width="1.5"/></svg>
+                        Equip
+                    </button>
+                    <button class="tool-btn" data-tool="duct" title="Route Duct (D)">
+                        <svg width="14" height="14" viewBox="0 0 14 14"><line x1="1" y1="12" x2="7" y2="5" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="5" x2="13" y2="2" stroke="currentColor" stroke-width="1.5"/></svg>
+                        Duct
+                    </button>
+                </div>
+                <div class="sep"></div>
+                <div class="toolbar-group">
+                    <button class="tool-btn" id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
+                    <button class="tool-btn" id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
+                </div>
+                <div class="sep"></div>
+                <div class="toolbar-group">
+                    <button class="tool-btn" id="btn-fit" title="Fit View">Fit</button>
+                    <button class="tool-btn" id="btn-sql" title="SQL Console">SQL</button>
+                </div>
             </div>
             <div id="canvas-wrap">
                 <canvas id="plan"></canvas>
                 <div id="props"></div>
+                <div id="equip-picker" class="hidden">
+                    <div class="picker-header">Select Product Type</div>
+                    <div id="equip-picker-list"></div>
+                </div>
             </div>
             <div id="query-panel">
                 <textarea id="query-input" rows="2" placeholder="SELECT * FROM spaces LIMIT 10 (Enter to run)"></textarea>
                 <pre id="query-result"></pre>
             </div>
             <div id="status">
-                <span id="st-file"></span>
-                <span id="st-counts"></span>
+                <span id="st-tool">Select</span>
+                <span class="sep-dot"></span>
                 <span id="st-zoom">100%</span>
+                <span class="sep-dot"></span>
+                <span id="st-counts"></span>
+                <span class="sep-dot"></span>
+                <span id="st-coords">0.00, 0.00 m</span>
             </div>
         </div>
     </div>
