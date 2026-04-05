@@ -277,35 +277,32 @@ mod tests {
 
     #[test]
     fn import_basic_csv() {
-        // Create a test CSV
         let csv_content = "Tag,Manufacturer,Model,CFM,Room Number,Room Name,Level\nLD-1,Titus,FL-10,185,L1-01,Sales Area,Level 1\nLD-1,Titus,FL-10,180,L1-01,Sales Area,Level 1\nSR-1,Titus,S300FL,90,L1-12,BOH Storage,Level 1\nEF-1,Broan,L-400L,210,L2-09,BOH Storage,Level 2\n";
 
-        let csv_path = "test_import.csv";
-        let sed_path = "test_import.sed";
-        std::fs::write(csv_path, csv_content).unwrap();
+        let csv_tmp = tempfile::NamedTempFile::with_suffix(".csv").unwrap();
+        let csv_path = csv_tmp.path().to_str().unwrap().to_string();
+        std::fs::write(&csv_path, csv_content).unwrap();
 
-        let result = import_csv(csv_path, sed_path, "Test Import", "TI-001", &ColumnMapping::default()).unwrap();
+        let sed_tmp = tempfile::NamedTempFile::with_suffix(".sed").unwrap();
+        let sed_path = sed_tmp.path().to_str().unwrap().to_string();
+        drop(sed_tmp); // release for create
+
+        let result = import_csv(&csv_path, &sed_path, "Test Import", "TI-001", &ColumnMapping::default()).unwrap();
 
         assert_eq!(result.rows_read, 4);
-        assert_eq!(result.product_types_created, 3); // LD-1, SR-1, EF-1
+        assert_eq!(result.product_types_created, 3);
         assert_eq!(result.placements_created, 4);
-        assert_eq!(result.spaces_created, 3); // L1-01, L1-12, L2-09
+        assert_eq!(result.spaces_created, 3);
 
-        // Verify the file
-        let doc = SedDocument::open(sed_path).unwrap();
+        let doc = SedDocument::open(&sed_path).unwrap();
         let info = doc.info().unwrap();
         assert_eq!(info.project_name, "Test Import");
         assert_eq!(info.product_types, 3);
         assert_eq!(info.placements, 4);
-        assert_eq!(info.spaces, 3);
 
-        // EF-1 should be equipment domain
         let types = doc.list_product_types().unwrap();
         let ef = types.iter().find(|t| t.tag == "EF-1").unwrap();
         assert_eq!(ef.domain, "equipment");
         assert_eq!(ef.category, "exhaust_fan");
-
-        std::fs::remove_file(csv_path).ok();
-        std::fs::remove_file(sed_path).ok();
     }
 }

@@ -9,6 +9,7 @@ pub mod undo;
 pub mod validate;
 pub mod diff;
 pub mod import;
+pub mod nlq;
 mod tests;
 mod bug_tests;
 

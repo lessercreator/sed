@@ -1,6 +1,7 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use sed_sdk::SedDocument;
+use std::collections::BTreeMap;
 
 #[derive(Parser)]
 #[command(name = "sedtool", about = "Structured Engineering Document — CLI")]
@@ -68,6 +69,22 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Show comprehensive project statistics
+    Stats {
+        /// Path to .sed file
+        file: String,
+    },
+    /// Export equipment schedule to CSV
+    ExportSchedule {
+        /// Path to .sed file
+        file: String,
+        /// Output CSV path
+        #[arg(short, long, default_value = "schedule.csv")]
+        output: String,
+        /// Type filter: all, equipment, or air_devices
+        #[arg(short = 't', long = "type", default_value = "all")]
+        schedule_type: ScheduleType,
+    },
     /// Import a CSV equipment schedule into a .sed file
     ImportCsv {
         /// CSV file to import
@@ -82,6 +99,20 @@ enum Commands {
         #[arg(short = 'N', long, default_value = "IMP-001")]
         number: String,
     },
+    /// Ask a question in plain English
+    Ask {
+        /// Path to .sed file
+        file: String,
+        /// Question in natural language
+        question: String,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+enum ScheduleType {
+    All,
+    Equipment,
+    AirDevices,
 }
 
 fn main() -> Result<()> {
@@ -96,7 +127,10 @@ fn main() -> Result<()> {
         Commands::Office { output } => cmd_office(&output),
         Commands::ExportPdf { file, output, level } => cmd_export_pdf(&file, &output, &level),
         Commands::Diff { old, new, json } => cmd_diff(&old, &new, json),
+        Commands::Stats { file } => cmd_stats(&file),
+        Commands::ExportSchedule { file, output, schedule_type } => cmd_export_schedule(&file, &output, &schedule_type),
         Commands::ImportCsv { csv, output, name, number } => cmd_import_csv(&csv, &output, &name, &number),
+        Commands::Ask { file, question } => cmd_ask(&file, &question),
     }
 }
 
@@ -369,6 +403,211 @@ fn cmd_diff(old_path: &str, new_path: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_stats(file: &str) -> Result<()> {
+    let doc = SedDocument::open(file)?;
+    let info = doc.info()?;
+
+    // Header
+    println!("Project Statistics: {} (#{})", info.project_name, info.project_number);
+    let header_len = format!("Project Statistics: {} (#{})", info.project_name, info.project_number).len();
+    println!("{}", "\u{2550}".repeat(header_len));
+    println!();
+
+    // SYSTEMS — query systems with design CFM from source equipment or graph terminals
+    let systems = doc.query_raw(
+        "SELECT s.tag, s.name, s.system_type, s.medium,
+                COALESCE(
+                    (SELECT CAST(SUM(p.cfm) AS INTEGER) FROM nodes n
+                     JOIN placements p ON n.placement_id = p.id
+                     WHERE n.system_id = s.id AND n.node_type = 'terminal' AND p.cfm IS NOT NULL),
+                    (SELECT CAST(src.cfm AS INTEGER) FROM placements src WHERE src.id = s.source_id)
+                ) as design_cfm
+         FROM systems s ORDER BY s.tag"
+    )?;
+    if !systems.is_empty() {
+        println!("SYSTEMS");
+        for row in &systems {
+            let tag = &row[0].1;
+            let name = &row[1].1;
+            let cfm = &row[4].1;
+            let cfm_str = if cfm != "NULL" {
+                format!("    {} CFM design", cfm)
+            } else {
+                String::new()
+            };
+            println!("  {:<12}{}{}", tag, name, cfm_str);
+        }
+        println!();
+    }
+
+    // AIR BALANCE — per level, sum CFM by supply/return/exhaust categories
+    let air_data = doc.query_raw(
+        "SELECT p.level, pt.category,
+                COALESCE(SUM(p.cfm), 0) as total_cfm
+         FROM placements p
+         JOIN product_types pt ON p.product_type_id = pt.id
+         WHERE p.cfm IS NOT NULL AND pt.domain = 'air_device'
+         GROUP BY p.level, pt.category
+         ORDER BY p.level, pt.category"
+    )?;
+    if !air_data.is_empty() {
+        // Group by level. Classify categories into supply/return/exhaust.
+        let mut levels: BTreeMap<String, (f64, f64, f64)> = BTreeMap::new();
+        for row in &air_data {
+            let level = &row[0].1;
+            let category = &row[1].1;
+            let cfm: f64 = row[2].1.parse().unwrap_or(0.0);
+            let entry = levels.entry(level.clone()).or_insert((0.0, 0.0, 0.0));
+            if category.contains("supply") || category.contains("ceiling_diffuser") {
+                entry.0 += cfm;
+            } else if category.contains("return") {
+                entry.1 += cfm;
+            } else if category.contains("exhaust") {
+                entry.2 += cfm;
+            }
+        }
+        println!("AIR BALANCE");
+        for (level, (supply, ret, exhaust)) in &levels {
+            let net = supply - ret - exhaust;
+            let sign = if net >= 0.0 { "+" } else { "" };
+            println!("  {}: Supply {:.0} CFM | Return {:.0} CFM | Exhaust {:.0} CFM | Net {}{:.0}",
+                     level, supply, ret, exhaust, sign, net);
+        }
+        println!();
+    }
+
+    // EQUIPMENT SUMMARY
+    let equipment = doc.query_raw(
+        "SELECT COUNT(*) as total,
+                SUM(CASE WHEN p.status LIKE 'existing%' THEN 1 ELSE 0 END) as existing,
+                SUM(CASE WHEN p.status = 'new' THEN 1 ELSE 0 END) as new_count
+         FROM placements p
+         JOIN product_types pt ON p.product_type_id = pt.id
+         WHERE pt.domain = 'equipment'"
+    )?;
+    if !equipment.is_empty() {
+        let total = &equipment[0][0].1;
+        let existing = &equipment[0][1].1;
+        let new_count = &equipment[0][2].1;
+        if total != "0" {
+            println!("EQUIPMENT SUMMARY");
+            println!("  {} equipment items ({} existing, {} new)", total, existing, new_count);
+            println!();
+        }
+    }
+
+    // DEVICE COUNT BY CATEGORY
+    let categories = doc.query_raw(
+        "SELECT pt.category, COUNT(*) as cnt
+         FROM placements p
+         JOIN product_types pt ON p.product_type_id = pt.id
+         GROUP BY pt.category
+         ORDER BY cnt DESC"
+    )?;
+    if !categories.is_empty() {
+        println!("DEVICE COUNT BY CATEGORY");
+        // Find max category name length for alignment
+        let max_len = categories.iter().map(|r| r[0].1.len()).max().unwrap_or(0);
+        for row in &categories {
+            println!("  {:width$}  {:>3}", row[0].1, row[1].1, width = max_len);
+        }
+        println!();
+    }
+
+    // SUBMITTAL STATUS
+    let submittals = doc.query_raw(
+        "SELECT COUNT(*) as total,
+                SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+                SUM(CASE WHEN status IN ('pending', 'submitted', 'for_approval') THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected
+         FROM submittals"
+    )?;
+    if !submittals.is_empty() {
+        let total = &submittals[0][0].1;
+        if total != "0" {
+            let approved = &submittals[0][1].1;
+            let pending = &submittals[0][2].1;
+            let rejected = &submittals[0][3].1;
+            println!("SUBMITTAL STATUS");
+            println!("  {} total: {} approved, {} pending, {} rejected", total, approved, pending, rejected);
+            println!();
+        }
+    }
+
+    // GRAPH COVERAGE
+    let nodes_count = info.nodes;
+    let segments_count = info.segments;
+    if nodes_count > 0 || segments_count > 0 {
+        let terminals = doc.query_raw(
+            "SELECT COUNT(*) FROM nodes WHERE node_type = 'terminal'"
+        )?;
+        let terminal_count = if !terminals.is_empty() { terminals[0][0].1.clone() } else { "0".to_string() };
+        println!("GRAPH COVERAGE");
+        println!("  {} nodes, {} segments", nodes_count, segments_count);
+        println!("  {} terminal connections", terminal_count);
+        println!();
+    }
+
+    // COMPLETENESS
+    let positioned = doc.query_raw(
+        "SELECT COUNT(*) FROM placements WHERE x IS NOT NULL AND y IS NOT NULL"
+    )?;
+    let unpositioned = doc.query_raw(
+        "SELECT COUNT(*) FROM placements WHERE x IS NULL OR y IS NULL"
+    )?;
+    let pos_count: i64 = if !positioned.is_empty() { positioned[0][0].1.parse().unwrap_or(0) } else { 0 };
+    let unpos_count: i64 = if !unpositioned.is_empty() { unpositioned[0][0].1.parse().unwrap_or(0) } else { 0 };
+
+    println!("COMPLETENESS");
+    println!("  {} spaces defined", info.spaces);
+    println!("  {} placements ({} positioned, {} unpositioned)", pos_count + unpos_count, pos_count, unpos_count);
+    println!("  {} keyed notes", info.keyed_notes);
+
+    Ok(())
+}
+
+fn cmd_export_schedule(file: &str, output: &str, schedule_type: &ScheduleType) -> Result<()> {
+    let doc = SedDocument::open(file)?;
+
+    let where_clause = match schedule_type {
+        ScheduleType::Equipment => " WHERE pt.domain = 'equipment'",
+        ScheduleType::AirDevices => " WHERE pt.domain = 'air_device'",
+        ScheduleType::All => "",
+    };
+
+    let sql = format!(
+        "SELECT COALESCE(p.instance_tag, pt.tag) as tag, p.instance_tag, pt.category,
+                pt.manufacturer, pt.model, p.cfm, p.status, p.level,
+                s.name as room, p.phase, p.notes
+         FROM placements p
+         JOIN product_types pt ON p.product_type_id = pt.id
+         LEFT JOIN spaces s ON p.space_id = s.id
+         {}
+         ORDER BY p.level, pt.tag",
+        where_clause
+    );
+
+    let rows = doc.query_raw(&sql)?;
+
+    let out_file = std::fs::File::create(output)?;
+    let mut wtr = csv::Writer::from_writer(out_file);
+
+    // Write header
+    wtr.write_record(&["Tag", "Instance Tag", "Category", "Manufacturer", "Model", "CFM", "Status", "Level", "Room", "Phase", "Notes"])?;
+
+    // Write data rows
+    for row in &rows {
+        let record: Vec<&str> = row.iter().map(|(_, v)| {
+            if v == "NULL" { "" } else { v.as_str() }
+        }).collect();
+        wtr.write_record(&record)?;
+    }
+
+    wtr.flush()?;
+    println!("Exported {} rows to {}", rows.len(), output);
+    Ok(())
+}
+
 fn cmd_import_csv(csv_path: &str, output: &str, name: &str, number: &str) -> Result<()> {
     println!("Importing: {} -> {}", csv_path, output);
     let mapping = sed_sdk::import::ColumnMapping::default();
@@ -378,5 +617,12 @@ fn cmd_import_csv(csv_path: &str, output: &str, name: &str, number: &str) -> Res
     let doc = SedDocument::open(output)?;
     let info = doc.info()?;
     print!("\n{}", info);
+    Ok(())
+}
+
+fn cmd_ask(file: &str, question: &str) -> Result<()> {
+    let doc = SedDocument::open(file)?;
+    let result = sed_sdk::nlq::ask(&doc, question)?;
+    print!("{}", result);
     Ok(())
 }
