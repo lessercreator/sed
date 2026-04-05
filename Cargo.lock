@@ -3348,6 +3348,7 @@ dependencies = [
  "clap",
  "csv",
  "printpdf",
+ "rusqlite",
  "sed-sdk",
  "serde_json",
 ]
