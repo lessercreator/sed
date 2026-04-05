@@ -271,6 +271,28 @@ function buildDevicesTab() {
     });
 }
 
+async function createProductTypeDialog() {
+    const result = await showDialog('New Product Type', [
+        { name: 'tag', label: 'Tag', type: 'text', placeholder: 'e.g. LD-1, AHU, VAV' },
+        { name: 'domain', label: 'Domain', type: 'select', default: 'air_device', options: [
+            'air_device', 'equipment', 'accessory',
+        ]},
+        { name: 'category', label: 'Category', type: 'text', placeholder: 'e.g. supply_diffuser, rtu, vav_box' },
+        { name: 'manufacturer', label: 'Manufacturer', type: 'text' },
+        { name: 'model', label: 'Model', type: 'text' },
+    ]);
+    if (!result || !result.tag) return;
+    await invoke('create_product_type', {
+        tag: result.tag,
+        domain: result.domain || 'air_device',
+        category: result.category || 'air_device',
+        manufacturer: result.manufacturer || null,
+        model: result.model || null,
+        description: null,
+    });
+    await reloadAfterMutation();
+}
+
 function buildCatalogTab() {
     const container = document.getElementById('tab-catalog');
     container.innerHTML = '';
@@ -281,16 +303,7 @@ function buildCatalogTab() {
     addBtn.style.justifyContent = 'center';
     addBtn.style.fontWeight = '600';
     addBtn.innerHTML = '+ New Product Type';
-    addBtn.onclick = async () => {
-        const tag = prompt('Product type tag (e.g. LD-1, AHU, VAV):');
-        if (!tag) return;
-        const domain = prompt('Domain (equipment, air_device, accessory):', 'air_device') || 'air_device';
-        const category = prompt('Category (supply_diffuser, rtu, vav_box, exhaust_fan, etc.):') || 'air_device';
-        const manufacturer = prompt('Manufacturer:') || null;
-        const model = prompt('Model:') || null;
-        await invoke('create_product_type', { tag, domain, category, manufacturer, model, description: null });
-        await reloadAfterMutation();
-    };
+    addBtn.onclick = () => createProductTypeDialog();
     container.appendChild(addBtn);
 
     const byDomain = {};
@@ -823,16 +836,26 @@ async function finishRoom() {
         return;
     }
 
-    const tag = prompt('Room tag (e.g. L1-14):');
-    if (!tag) { roomDraw.vertices = []; roomDraw.active = false; state.dirty = true; return; }
-    const name = prompt('Room name:') || 'Unnamed';
-    const spaceType = prompt('Space type (retail, office, storage, restroom, corridor, mechanical):') || 'office';
+    const result = await showDialog('New Room', [
+        { name: 'tag', label: 'Room Tag', type: 'text', placeholder: 'e.g. L1-14' },
+        { name: 'name', label: 'Room Name', type: 'text', placeholder: 'e.g. Main Lobby' },
+        { name: 'spaceType', label: 'Space Type', type: 'select', default: 'office', options: [
+            'retail', 'office', 'storage', 'restroom', 'corridor', 'mechanical',
+        ]},
+    ]);
+
+    if (!result || !result.tag) {
+        roomDraw.vertices = [];
+        roomDraw.active = false;
+        state.dirty = true;
+        return;
+    }
 
     await invoke('create_space', {
-        tag,
-        name,
+        tag: result.tag,
+        name: result.name || 'Unnamed',
         level: state.currentLevel,
-        spaceType,
+        spaceType: result.spaceType || 'office',
         scope: 'in_contract',
         vertices: roomDraw.vertices.map(v => ({ x: v.x, y: v.y })),
     });
@@ -851,7 +874,18 @@ function showEquipmentPicker(screenX, screenY) {
     list.innerHTML = '';
 
     if (state.productTypes.length === 0) {
-        list.innerHTML = '<div style="padding:8px;color:var(--text3);font-size:12px">No product types in catalog. Create one first.</div>';
+        const msg = el('div', '');
+        msg.style.cssText = 'padding:8px;color:var(--text3);font-size:12px';
+        msg.textContent = 'No product types in catalog.';
+        list.appendChild(msg);
+        const createBtn = el('div', 'item');
+        createBtn.style.cssText = 'color:var(--accent);justify-content:center;font-weight:600;margin-top:4px';
+        createBtn.textContent = '+ Create One';
+        createBtn.onclick = async () => {
+            picker.classList.add('hidden');
+            await createProductTypeDialog();
+        };
+        list.appendChild(createBtn);
     } else {
         state.productTypes.forEach(pt => {
             const item = el('div', 'item');
@@ -890,38 +924,68 @@ function showEquipmentPicker(screenX, screenY) {
 async function handleDuctClick(wx, wy) {
     if (!ductDraw.systemId) {
         if (state.systems.length === 0) {
-            const tag = prompt('No systems exist. Create one.\nSystem tag (e.g. RTU-1-SA):');
-            if (!tag) return;
-            const name = prompt('System name:') || tag;
-            const sysType = prompt('System type (supply, return, exhaust):') || 'supply';
-            const result = await invoke('create_system', {
-                tag,
-                name,
-                systemType: sysType,
+            const result = await showDialog('Create System', [
+                { name: 'tag', label: 'System Tag', type: 'text', placeholder: 'e.g. RTU-1-SA' },
+                { name: 'name', label: 'System Name', type: 'text', placeholder: 'e.g. RTU-1 Supply Air' },
+                { name: 'systemType', label: 'System Type', type: 'select', default: 'supply', options: [
+                    'supply', 'return', 'exhaust',
+                ]},
+            ]);
+            if (!result || !result.tag) return;
+            const sysResult = await invoke('create_system', {
+                tag: result.tag,
+                name: result.name || result.tag,
+                systemType: result.systemType || 'supply',
                 medium: 'air',
                 sourceId: null,
             });
             await reloadAfterMutation();
-            ductDraw.systemId = result.id;
+            ductDraw.systemId = sysResult.id;
         } else {
-            const sysNames = state.systems.map((s, i) => `${i + 1}. ${s.tag} (${s.system_type})`).join('\n');
-            const choice = prompt(`Select system:\n${sysNames}\nEnter number:`);
-            if (!choice) return;
-            const idx = parseInt(choice) - 1;
-            if (idx < 0 || idx >= state.systems.length) return;
-            ductDraw.systemId = state.systems[idx].id;
+            const sysOptions = state.systems.map(s => ({
+                value: s.id,
+                label: `${s.tag} (${s.system_type})`,
+            }));
+            sysOptions.push({ value: '__new__', label: '+ Create New System' });
+            const result = await showDialog('Select System', [
+                { name: 'systemId', label: 'System', type: 'select', options: sysOptions },
+            ]);
+            if (!result) return;
+            if (result.systemId === '__new__') {
+                const newSys = await showDialog('Create System', [
+                    { name: 'tag', label: 'System Tag', type: 'text', placeholder: 'e.g. RTU-1-SA' },
+                    { name: 'name', label: 'System Name', type: 'text', placeholder: 'e.g. RTU-1 Supply Air' },
+                    { name: 'systemType', label: 'System Type', type: 'select', default: 'supply', options: [
+                        'supply', 'return', 'exhaust',
+                    ]},
+                ]);
+                if (!newSys || !newSys.tag) return;
+                const sysResult = await invoke('create_system', {
+                    tag: newSys.tag,
+                    name: newSys.name || newSys.tag,
+                    systemType: newSys.systemType || 'supply',
+                    medium: 'air',
+                    sourceId: null,
+                });
+                await reloadAfterMutation();
+                ductDraw.systemId = sysResult.id;
+            } else {
+                ductDraw.systemId = result.systemId;
+            }
         }
     }
 
-    const diamStr = ductDraw.nodes.length === 0
-        ? prompt('Duct diameter in inches (e.g. 8, 12, 14):', '8')
-        : ductDraw.diameter;
-    if (ductDraw.nodes.length === 0 && !diamStr) return;
+    if (ductDraw.nodes.length === 0) {
+        const diamResult = await showDialog('Duct Size', [
+            { name: 'diameter', label: 'Diameter (inches)', type: 'number', default: '8', placeholder: 'e.g. 8, 12, 14' },
+        ]);
+        if (!diamResult || !diamResult.diameter) return;
+        ductDraw.diameterInches = parseFloat(diamResult.diameter);
+        ductDraw.diameter = String(ductDraw.diameterInches);
+    }
 
-    const diamInches = ductDraw.nodes.length === 0 ? parseFloat(diamStr) : ductDraw.diameterInches;
+    const diamInches = ductDraw.diameterInches;
     const diamM = diamInches * 0.0254;
-    ductDraw.diameter = String(diamInches);
-    ductDraw.diameterInches = diamInches;
 
     const nodeResult = await invoke('create_node', {
         systemId: ductDraw.systemId,
@@ -1447,6 +1511,96 @@ function nv(v) {
 function esc(s) {
     if (s == null) return '';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// =============================================================================
+// MODAL DIALOG
+// =============================================================================
+function showDialog(title, fields) {
+    return new Promise((resolve) => {
+        const overlay = document.getElementById('input-dialog');
+        const titleEl = document.getElementById('input-dialog-title');
+        const fieldsEl = document.getElementById('input-dialog-fields');
+        const okBtn = document.getElementById('input-dialog-ok');
+        const cancelBtn = document.getElementById('input-dialog-cancel');
+
+        titleEl.textContent = title;
+        fieldsEl.innerHTML = '';
+
+        fields.forEach(f => {
+            const label = document.createElement('label');
+            label.textContent = f.label;
+            fieldsEl.appendChild(label);
+
+            let input;
+            if (f.type === 'select') {
+                input = document.createElement('select');
+                (f.options || []).forEach(opt => {
+                    const o = document.createElement('option');
+                    if (typeof opt === 'object') {
+                        o.value = opt.value;
+                        o.textContent = opt.label;
+                    } else {
+                        o.value = opt;
+                        o.textContent = opt;
+                    }
+                    input.appendChild(o);
+                });
+                if (f.default != null) input.value = f.default;
+            } else {
+                input = document.createElement('input');
+                input.type = f.type || 'text';
+                if (f.default != null) input.value = f.default;
+                if (f.placeholder) input.placeholder = f.placeholder;
+            }
+            input.dataset.fieldName = f.name;
+            fieldsEl.appendChild(input);
+        });
+
+        overlay.classList.add('open');
+
+        const firstInput = fieldsEl.querySelector('input, select');
+        if (firstInput) firstInput.focus();
+
+        function cleanup() {
+            overlay.classList.remove('open');
+            okBtn.removeEventListener('click', onOk);
+            cancelBtn.removeEventListener('click', onCancel);
+            overlay.removeEventListener('keydown', onKeydown);
+        }
+
+        function gather() {
+            const result = {};
+            fieldsEl.querySelectorAll('[data-field-name]').forEach(inp => {
+                result[inp.dataset.fieldName] = inp.value;
+            });
+            return result;
+        }
+
+        function onOk() {
+            cleanup();
+            resolve(gather());
+        }
+
+        function onCancel() {
+            cleanup();
+            resolve(null);
+        }
+
+        function onKeydown(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                onOk();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                onCancel();
+            }
+        }
+
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+        overlay.addEventListener('keydown', onKeydown);
+    });
 }
 
 // =============================================================================

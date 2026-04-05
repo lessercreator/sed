@@ -11,6 +11,8 @@ pub mod diff;
 pub mod import;
 pub mod nlq;
 pub mod clipboard;
+pub mod autosize;
+pub mod design_check;
 mod tests;
 mod bug_tests;
 

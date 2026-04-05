@@ -108,6 +108,14 @@ enum Commands {
         /// Question in natural language
         question: String,
     },
+    /// Run design checks (duct sizing, air balance, connectivity)
+    Check {
+        /// Path to .sed file
+        file: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -140,6 +148,7 @@ fn main() -> Result<()> {
         }
         Commands::ImportCsv { csv, output, name, number } => cmd_import_csv(&csv, &output, &name, &number),
         Commands::Ask { file, question } => cmd_ask(&file, &question),
+        Commands::Check { file, json } => cmd_check(&file, json),
     }
 }
 
@@ -432,5 +441,35 @@ fn cmd_ask(file: &str, question: &str) -> Result<()> {
     let doc = SedDocument::open(file)?;
     let result = sed_sdk::nlq::ask(&doc, question)?;
     print!("{}", result);
+    Ok(())
+}
+
+fn cmd_check(file: &str, json: bool) -> Result<()> {
+    let doc = SedDocument::open(file)?;
+    let issues = sed_sdk::design_check::check_design(&doc)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&issues)?);
+        return Ok(());
+    }
+
+    if issues.is_empty() {
+        println!("PASS -- no design issues found");
+        return Ok(());
+    }
+
+    let errors = issues.iter().filter(|i| i.severity == sed_sdk::design_check::Severity::Error).count();
+    let warnings = issues.iter().filter(|i| i.severity == sed_sdk::design_check::Severity::Warning).count();
+    let infos = issues.iter().filter(|i| i.severity == sed_sdk::design_check::Severity::Info).count();
+
+    for issue in &issues {
+        println!("{}", issue);
+    }
+
+    println!("\n{} error(s), {} warning(s), {} info(s)", errors, warnings, infos);
+
+    if errors > 0 {
+        std::process::exit(1);
+    }
     Ok(())
 }
