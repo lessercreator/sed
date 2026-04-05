@@ -130,6 +130,14 @@ enum Commands {
         /// Path to .sed file
         file: String,
     },
+    /// Generate a markdown project summary
+    ReportMd {
+        /// Path to .sed file
+        file: String,
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
     /// Export interactive HTML plan (opens in any browser)
     View {
         /// Path to .sed file
@@ -188,6 +196,17 @@ fn main() -> Result<()> {
         Commands::Ask { file, question } => cmd_ask(&file, &question),
         Commands::Check { file, json } => cmd_check(&file, json),
         Commands::Suggest { file } => cmd_suggest(&file),
+        Commands::ReportMd { file, output } => {
+            let doc = SedDocument::open(&file)?;
+            let md = sed_sdk::report::project_summary(&doc)?;
+            if let Some(path) = output {
+                std::fs::write(&path, &md)?;
+                println!("Written: {}", path);
+            } else {
+                print!("{}", md);
+            }
+            Ok(())
+        }
         Commands::View { file, output, level } => {
             html_export::export_html(&file, &output, &level)?;
             let _ = open::that(&output);
