@@ -65,8 +65,11 @@ pub fn populate_skims_geometry(doc: &SedDocument) -> Result<()> {
         )?;
 
         // Find space by tag, update coordinates and boundary link
+        // Note: query_raw doesn't accept params, so we use a safe format here.
+        // The tag comes from hardcoded constants, not user input.
+        let tag_escaped = room.tag.replace('\'', "''");
         let rows = doc.query_raw(&format!(
-            "SELECT id FROM spaces WHERE tag = '{}'", room.tag
+            "SELECT id FROM spaces WHERE tag = '{}'", tag_escaped
         ))?;
         if let Some(row) = rows.first() {
             let id = &row[0].1;
@@ -239,8 +242,9 @@ pub fn unpack_vertices(blob: &[u8]) -> Vec<(f64, f64)> {
 
 /// Get the bounding rectangle for all rooms on a given level.
 pub fn level_bounds(doc: &SedDocument, level: &str) -> Result<(f64, f64, f64, f64)> {
+    let level_escaped = level.replace('\'', "''");
     let rows = doc.query_raw(&format!(
-        "SELECT MIN(x), MIN(y), MAX(x), MAX(y) FROM spaces WHERE level = '{}' AND x IS NOT NULL", level
+        "SELECT MIN(x), MIN(y), MAX(x), MAX(y) FROM spaces WHERE level = '{}' AND x IS NOT NULL", level_escaped
     ))?;
     if let Some(row) = rows.first() {
         let x_min: f64 = row[0].1.parse().unwrap_or(0.0);

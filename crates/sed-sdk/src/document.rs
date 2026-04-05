@@ -490,8 +490,19 @@ impl SedDocument {
         Ok(self.conn.execute(sql, params)?)
     }
 
-    /// Count rows in a table.
+    /// Count rows in a table. Table name is validated against known tables.
     pub fn count(&self, table: &str) -> Result<i64> {
+        const ALLOWED: &[&str] = &[
+            "meta", "directory", "geometry_polygons", "geometry_polylines",
+            "spaces", "product_types", "placements", "systems", "placement_systems",
+            "nodes", "segments", "insulation", "submittals", "attachments",
+            "sheets", "views", "annotations", "general_notes", "keyed_notes",
+            "keyed_note_refs", "revisions", "revision_changes", "schedule_data",
+            "spatial_idx", "spatial_map",
+        ];
+        if !ALLOWED.contains(&table) {
+            anyhow::bail!("Table '{}' not allowed in count()", table);
+        }
         let sql = format!("SELECT COUNT(*) FROM {}", table);
         Ok(self.conn.query_row(&sql, [], |row| row.get(0))?)
     }
