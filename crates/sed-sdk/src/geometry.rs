@@ -157,7 +157,7 @@ pub fn populate_spatial_index(doc: &SedDocument) -> Result<()> {
     }
 
     // Also add spaces that have boundary polygons with proper bounds
-    let bounded = doc.query_raw(
+    let _bounded = doc.query_raw(
         "SELECT s.id, gp.vertices FROM spaces s JOIN geometry_polygons gp ON s.boundary_id = gp.id"
     )?;
     // If a space has a polygon, update its spatial_idx entry with the real bounds
@@ -238,6 +238,92 @@ pub fn unpack_vertices(blob: &[u8]) -> Vec<(f64, f64)> {
         i += 16;
     }
     points
+}
+
+/// Room geometry data returned from get_room_geometry.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoomGeometry {
+    pub tag: String,
+    pub name: String,
+    pub scope: String,
+    pub id: String,
+    pub vertices: Vec<Vertex>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Vertex {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Query room boundary polygons for a given level.
+/// Falls back to a default rectangle around the center point if no polygon exists.
+pub fn get_room_geometry(doc: &SedDocument, level: &str) -> Result<Vec<RoomGeometry>> {
+    use rusqlite::params;
+
+    let mut results = Vec::new();
+
+    // Query spaces that have boundary polygons
+    let mut stmt = doc.conn.prepare(
+        "SELECT s.id, s.tag, s.name, s.scope, gp.vertices, gp.vertex_count
+         FROM spaces s
+         JOIN geometry_polygons gp ON s.boundary_id = gp.id
+         WHERE s.level = ?1"
+    ).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let rows = stmt.query_map(params![level], |row| {
+        let id: String = row.get(0)?;
+        let tag: String = row.get(1)?;
+        let name: String = row.get(2)?;
+        let scope: String = row.get(3)?;
+        let blob: Vec<u8> = row.get(4)?;
+        Ok((id, tag, name, scope, blob))
+    }).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let mut found_ids = std::collections::HashSet::new();
+
+    for row in rows {
+        let (id, tag, name, scope, blob) = row.map_err(|e| anyhow::anyhow!("{}", e))?;
+        let points = unpack_vertices(&blob);
+        let vertices: Vec<Vertex> = points.into_iter().map(|(x, y)| Vertex { x, y }).collect();
+        found_ids.insert(id.clone());
+        results.push(RoomGeometry { tag, name, scope, id, vertices });
+    }
+
+    // Fallback: spaces on this level without a boundary polygon
+    let mut stmt2 = doc.conn.prepare(
+        "SELECT id, tag, name, scope, x, y, area_m2 FROM spaces WHERE level = ?1 AND boundary_id IS NULL"
+    ).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let fallback_rows = stmt2.query_map(params![level], |row| {
+        let id: String = row.get(0)?;
+        let tag: String = row.get(1)?;
+        let name: String = row.get(2)?;
+        let scope: String = row.get(3)?;
+        let x: Option<f64> = row.get(4)?;
+        let y: Option<f64> = row.get(5)?;
+        let area: Option<f64> = row.get(6)?;
+        Ok((id, tag, name, scope, x, y, area))
+    }).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    for row in fallback_rows {
+        let (id, tag, name, scope, x, y, area) = row.map_err(|e| anyhow::anyhow!("{}", e))?;
+        if found_ids.contains(&id) { continue; }
+        if let (Some(cx), Some(cy)) = (x, y) {
+            let side = area.unwrap_or(4.0).sqrt();
+            let hw = side / 2.0;
+            let hh = side / 2.0;
+            let vertices = vec![
+                Vertex { x: cx - hw, y: cy - hh },
+                Vertex { x: cx + hw, y: cy - hh },
+                Vertex { x: cx + hw, y: cy + hh },
+                Vertex { x: cx - hw, y: cy + hh },
+            ];
+            results.push(RoomGeometry { tag, name, scope, id, vertices });
+        }
+    }
+
+    Ok(results)
 }
 
 /// Get the bounding rectangle for all rooms on a given level.

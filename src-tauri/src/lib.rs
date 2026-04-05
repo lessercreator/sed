@@ -1,10 +1,12 @@
 use sed_sdk::SedDocument;
+use sed_sdk::undo::{UndoStack, Command};
 use std::sync::Mutex;
 use tauri::State;
 
 struct AppState {
     doc: Mutex<Option<SedDocument>>,
     file_path: Mutex<Option<String>>,
+    undo_stack: Mutex<UndoStack>,
 }
 
 // =============================================================================
@@ -93,11 +95,35 @@ fn get_submittals(state: State<AppState>) -> Result<serde_json::Value, String> {
 fn update_element(table: String, id: String, field: String, value: Option<String>, state: State<AppState>) -> Result<serde_json::Value, String> {
     let guard = state.doc.lock().unwrap();
     let doc = guard.as_ref().ok_or("No document open")?;
+
+    // Read old value before update (for undo)
+    let field_escaped = field.replace('\'', "''");
+    let id_escaped = id.replace('\'', "''");
+    let table_escaped = table.replace('\'', "''");
+    let old_rows = doc.query_raw(&format!(
+        "SELECT {} FROM {} WHERE id = '{}'", field_escaped, table_escaped, id_escaped
+    )).map_err(|e| e.to_string())?;
+    let old_value = old_rows.first()
+        .and_then(|row| row.first())
+        .map(|(_, v)| v.clone())
+        .and_then(|v| if v == "NULL" { None } else { Some(v) });
+
     let rows = match table.as_str() {
         "spaces" => doc.update_space(&id, &field, value.as_deref()).map_err(|e| e.to_string())?,
         "placements" => doc.update_placement(&id, &field, value.as_deref()).map_err(|e| e.to_string())?,
         _ => return Err(format!("Table '{}' not supported for update", table)),
     };
+
+    // Push undo command
+    let mut undo = state.undo_stack.lock().unwrap();
+    undo.push(Command::UpdateField {
+        table: table.clone(),
+        id: id.clone(),
+        field: field.clone(),
+        old_value,
+        new_value: value,
+    });
+
     Ok(serde_json::json!({ "ok": true, "rows_affected": rows }))
 }
 
@@ -114,6 +140,43 @@ fn delete_element(table: String, id: String, state: State<AppState>) -> Result<s
     Ok(serde_json::json!({ "ok": true, "rows_affected": rows }))
 }
 
+#[tauri::command]
+fn undo(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let guard = state.doc.lock().unwrap();
+    let doc = guard.as_ref().ok_or("No document open")?;
+    let mut stack = state.undo_stack.lock().unwrap();
+    let desc = stack.undo(doc).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "undone": desc }))
+}
+
+#[tauri::command]
+fn redo(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let guard = state.doc.lock().unwrap();
+    let doc = guard.as_ref().ok_or("No document open")?;
+    let mut stack = state.undo_stack.lock().unwrap();
+    let desc = stack.redo(doc).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "redone": desc }))
+}
+
+#[tauri::command]
+fn undo_info(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let stack = state.undo_stack.lock().unwrap();
+    Ok(serde_json::json!({
+        "can_undo": stack.can_undo(),
+        "can_redo": stack.can_redo(),
+        "undo_count": stack.undo_count(),
+        "redo_count": stack.redo_count(),
+    }))
+}
+
+#[tauri::command]
+fn get_room_geometry(level: String, state: State<AppState>) -> Result<serde_json::Value, String> {
+    let guard = state.doc.lock().unwrap();
+    let doc = guard.as_ref().ok_or("No document open")?;
+    let rooms = sed_sdk::geometry::get_room_geometry(doc, &level).map_err(|e| e.to_string())?;
+    serde_json::to_value(&rooms).map_err(|e| e.to_string())
+}
+
 // =============================================================================
 // APP
 // =============================================================================
@@ -126,6 +189,7 @@ pub fn run() {
         .manage(AppState {
             doc: Mutex::new(None),
             file_path: Mutex::new(None),
+            undo_stack: Mutex::new(UndoStack::new()),
         })
         .invoke_handler(tauri::generate_handler![
             open_file,
@@ -140,6 +204,10 @@ pub fn run() {
             get_submittals,
             update_element,
             delete_element,
+            undo,
+            redo,
+            undo_info,
+            get_room_geometry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running SED Editor");

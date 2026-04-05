@@ -13,3 +13,4 @@ sed-sdk = { path = "../sed-sdk" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
+printpdf = { workspace = true }

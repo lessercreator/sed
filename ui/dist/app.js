@@ -12,21 +12,7 @@ let selectedId = null;
 let canvas, ctx;
 let vx = 0, vy = 0, vscale = 40; // 40 pixels per meter
 let dragging = false, dsx = 0, dsy = 0;
-
-// Room dimensions lookup (approximate, in meters, matching geometry.rs)
-const ROOM_DIMS = {
-    'L1-01': [3,2,10,13], 'L1-02': [13.5,12,2.5,2.5], 'L1-03': [13.5,9.5,2.5,2.5],
-    'L1-04': [13.5,7.5,2.5,2], 'L1-05': [13.5,5.5,2.5,2], 'L1-06': [13.5,3.5,2.5,2],
-    'L1-07': [13.5,1.5,2.5,2], 'L1-08': [13.5,-0.5,2.5,2], 'L1-09': [13.5,-2.5,2.5,2],
-    'L1-10': [0,7,2.5,3], 'L1-11': [0,10.5,2.5,3], 'L1-12': [0,14,3,3.5],
-    'L1-13': [0,13.5,13,1.2], 'L1-14': [0,4,2.5,3],
-    'L1-16': [-2,0,1.5,17.7], 'L1-17': [16.5,0,1.5,17.7],
-    'L2-01': [3,2,10,5], 'L2-02': [3,7.5,10,1.5], 'L2-03': [3,9.5,5,4],
-    'L2-04': [8.5,9.5,1.5,4], 'L2-05': [10.5,9.5,3,4], 'L2-06': [10.5,14,2,2],
-    'L2-07': [12.5,14,2,2], 'L2-08': [3,14,4,3], 'L2-09': [7.5,14,3,3],
-    'L2-10': [0.5,9,2,2.5], 'L2-11': [0,7,2.5,2], 'L2-12': [7.5,13,1.5,1],
-    'L2-00': [0,5,2.5,2],
-};
+let roomGeometry = {}; // tag -> { vertices: [{x,y},...], id, name, scope }
 
 // =============================================================================
 // BOOT
@@ -76,10 +62,11 @@ async function loadDocument() {
         if (l === currentLevel) o.selected = true;
         sel.appendChild(o);
     });
-    sel.onchange = () => { currentLevel = sel.value; render(); };
+    sel.onchange = async () => { currentLevel = sel.value; await loadRoomGeometry(); render(); };
 
     buildSidebar();
     setupCanvas();
+    await loadRoomGeometry();
     fitView();
     render();
 }
@@ -91,8 +78,15 @@ async function reload() {
         invoke('get_placements'),
     ]);
     document.getElementById('st-counts').textContent = `${info.spaces} spaces | ${info.placements} placements`;
+    await loadRoomGeometry();
     buildSidebar();
     render();
+}
+
+async function loadRoomGeometry() {
+    const geom = await invoke('get_room_geometry', { level: currentLevel });
+    roomGeometry = {};
+    geom.forEach(r => { roomGeometry[r.tag] = r; });
 }
 
 // =============================================================================
@@ -283,11 +277,11 @@ function setupCanvas() {
         const r = canvas.getBoundingClientRect();
         const mx = (e.clientX - r.left - vx) / vscale;
         const my = (e.clientY - r.top - vy) / vscale;
-        // Check rooms
+        // Check rooms using polygon geometry
         const ls = spaces.filter(s => s.level === currentLevel);
         for (const s of ls) {
-            const dims = ROOM_DIMS[s.tag];
-            if (dims && mx >= dims[0] && mx <= dims[0] + dims[2] && my >= dims[1] && my <= dims[1] + dims[3]) {
+            const geom = roomGeometry[s.tag];
+            if (geom && pointInPolygon(mx, my, geom.vertices)) {
                 selectSpace(s);
                 return;
             }
@@ -327,26 +321,33 @@ function render() {
     for (let x = -5; x < 25; x++) { ctx.beginPath(); ctx.moveTo(x, -5); ctx.lineTo(x, 25); ctx.stroke(); }
     for (let y = -5; y < 25; y++) { ctx.beginPath(); ctx.moveTo(-5, y); ctx.lineTo(25, y); ctx.stroke(); }
 
-    // Rooms
+    // Rooms (drawn from polygon vertices)
     ls.forEach(s => {
-        const d = ROOM_DIMS[s.tag];
-        if (!d) return;
-        const [rx, ry, rw, rh] = d;
+        const geom = roomGeometry[s.tag];
+        if (!geom || !geom.vertices.length) return;
+        const verts = geom.vertices;
         const isNic = s.scope === 'nic';
         const isSel = selectedId === s.id;
 
-        // Fill
+        // Draw polygon fill
         ctx.fillStyle = isNic ? '#15151580' : isSel ? '#1a2a3a80' : '#1a2a3a30';
-        ctx.fillRect(rx, ry, rw, rh);
+        ctx.beginPath();
+        ctx.moveTo(verts[0].x, verts[0].y);
+        for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x, verts[i].y);
+        ctx.closePath();
+        ctx.fill();
 
-        // Border
-        ctx.strokeStyle = isSel ? 'var(--accent)' : isNic ? '#333' : '#4a9eff30';
-        ctx.lineWidth = isSel ? 0.06 : 0.03;
-        // Fix: can't use CSS var in canvas, use hex
+        // Draw polygon border
         ctx.strokeStyle = isSel ? '#4a9eff' : isNic ? '#333333' : '#4a9eff30';
-        ctx.strokeRect(rx, ry, rw, rh);
+        ctx.lineWidth = isSel ? 0.06 : 0.03;
+        ctx.beginPath();
+        ctx.moveTo(verts[0].x, verts[0].y);
+        for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x, verts[i].y);
+        ctx.closePath();
+        ctx.stroke();
 
-        // Room tag
+        // Room tag (place at first vertex + small offset)
+        const rx = verts[0].x, ry = verts[0].y;
         ctx.fillStyle = isNic ? '#444' : '#888';
         ctx.font = `${0.3}px ${getComputedStyle(document.body).fontFamily}`;
         ctx.fillText(s.tag, rx + 0.1, ry + 0.35);
@@ -457,3 +458,16 @@ document.addEventListener('keydown', e => {
 // HELPERS
 // =============================================================================
 function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
+
+// Ray-casting point-in-polygon test
+function pointInPolygon(px, py, verts) {
+    let inside = false;
+    for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) {
+        const xi = verts[i].x, yi = verts[i].y;
+        const xj = verts[j].x, yj = verts[j].y;
+        if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}

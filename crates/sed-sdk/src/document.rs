@@ -11,7 +11,7 @@ pub fn generate_id() -> String {
 }
 
 pub struct SedDocument {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl SedDocument {
