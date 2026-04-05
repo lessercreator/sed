@@ -484,6 +484,37 @@ impl SedDocument {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Run a parameterized SQL SELECT query. Returns rows as key-value pairs.
+    pub fn query_params(&self, sql: &str, params: &[&dyn rusqlite::types::ToSql]) -> Result<Vec<Vec<(String, String)>>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let col_count = stmt.column_count();
+        let col_names: Vec<String> = (0..col_count)
+            .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
+            .collect();
+
+        let rows = stmt.query_map(params, |row| {
+            let mut values = Vec::new();
+            for (i, name) in col_names.iter().enumerate() {
+                let val: String = row.get::<_, rusqlite::types::Value>(i)
+                    .map(|v| match v {
+                        rusqlite::types::Value::Null => "NULL".to_string(),
+                        rusqlite::types::Value::Integer(i) => i.to_string(),
+                        rusqlite::types::Value::Real(f) => {
+                            let s = format!("{}", f);
+                            if s.contains('.') { s } else { format!("{}.0", s) }
+                        }
+                        rusqlite::types::Value::Text(s) => s,
+                        rusqlite::types::Value::Blob(_) => "[BLOB]".to_string(),
+                    })
+                    .unwrap_or_else(|_| "ERROR".to_string());
+                values.push((name.clone(), val));
+            }
+            Ok(values)
+        })?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Execute a parameterized write statement (INSERT, UPDATE, DELETE).
     /// Crate-internal only — external consumers should use typed methods.
     pub(crate) fn execute_raw(&self, sql: &str, params: &[&dyn rusqlite::types::ToSql]) -> Result<usize> {

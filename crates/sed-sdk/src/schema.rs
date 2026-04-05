@@ -154,7 +154,7 @@ pub fn create_schema(conn: &Connection) -> Result<()> {
             pressure_class  TEXT,
             construction    TEXT,
             exposure        TEXT,
-            flow_design     REAL,           -- design flow rate in SI: m3/s for air, L/s for water
+            flow_design     REAL,           -- design flow: CFM (imperial) or L/s (metric) per units_display
             flow_balanced   REAL,
             status          TEXT NOT NULL,
             scope           TEXT NOT NULL DEFAULT 'in_contract',

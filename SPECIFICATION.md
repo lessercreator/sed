@@ -36,20 +36,29 @@ A `.sed` file is a single SQLite database containing an entire building's (or fa
 
 ## 3. Flow and Measurement Units
 
-All values are stored in SI:
+Geometry (coordinates, lengths, areas) is stored in SI. Performance values (airflow, pressure, temperature) are stored in the project's design units as set by `units_display`.
 
-| Quantity | Stored unit | Display (imperial) | Display (metric) |
-|---|---|---|---|
-| Length | meters | feet/inches | meters/mm |
-| Area | m² | ft² | m² |
-| Airflow | m³/s | CFM | L/s |
-| Water flow | L/s | GPM | L/s |
-| Pressure | Pa | in. WG | Pa |
-| Temperature | K | °F | °C |
-| Power | W | BTU/h or tons | kW |
-| Weight | kg | lbs | kg |
+**Always SI (not affected by units_display):**
 
-The `units_display` meta key (`imperial` or `metric`) determines the viewer's presentation units. The stored values never change.
+| Quantity | Stored unit |
+|---|---|
+| Coordinates (x, y) | meters |
+| Length (segment length, thickness) | meters |
+| Diameter, width, height | meters |
+| Area | m² |
+| Weight | kg |
+
+**Stored in project design units (determined by `units_display`):**
+
+| Quantity | Imperial (default) | Metric |
+|---|---|---|
+| Airflow (cfm, flow_design) | CFM | L/s |
+| Water flow (flow_design) | GPM | L/s |
+| Pressure (static_pressure_pa) | in. WG | Pa |
+| Temperature | °F | °C |
+| Power | BTU/h or tons | kW |
+
+The `units_display` meta key (`imperial` or `metric`) declares which unit system performance values are stored in. A conformant tool MUST read this key before interpreting flow, pressure, or temperature values.
 
 ---
 

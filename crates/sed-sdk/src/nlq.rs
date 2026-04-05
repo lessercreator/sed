@@ -98,19 +98,24 @@ fn try_total_cfm(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
         else if q.contains("exhaust") { "exhaust%" }
         else { "supply%" };
 
-    let mut sql = format!(
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut sql = String::from(
         "SELECT s.level, SUM(p.cfm) as total_cfm, COUNT(*) as device_count
          FROM placements p
          JOIN product_types pt ON p.product_type_id = pt.id
          LEFT JOIN spaces s ON p.space_id = s.id
-         WHERE pt.category LIKE '{}'", category
+         WHERE pt.category LIKE ?1"
     );
+    params.push(Box::new(category.to_string()));
+
     if let Some(ref lvl) = level {
-        sql += &format!(" AND p.level = '{}'", lvl);
+        sql += " AND p.level = ?2";
+        params.push(Box::new(lvl.clone()));
     }
     sql += " GROUP BY s.level ORDER BY s.level";
 
-    let rows = doc.query_raw(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref() as &dyn rusqlite::types::ToSql).collect();
+    let rows = doc.query_params(&sql, &param_refs)?;
     let cat_name = category.trim_end_matches('%');
     let interp = match &level {
         Some(lvl) => format!("Total {} CFM on {}", cat_name, lvl),
@@ -126,6 +131,8 @@ fn try_count_devices(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
     let category = extract_category(q);
     let level = extract_level(q);
 
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut param_idx = 0u32;
     let mut sql = String::from(
         "SELECT pt.tag, pt.category, COUNT(*) as qty, SUM(p.cfm) as total_cfm
          FROM placements p
@@ -135,20 +142,25 @@ fn try_count_devices(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
     let mut interp = String::from("Count of ");
 
     if let Some(ref cat) = category {
-        sql += &format!(" AND pt.category LIKE '%{}%'", cat);
+        param_idx += 1;
+        sql += &format!(" AND pt.category LIKE ?{}", param_idx);
+        params.push(Box::new(format!("%{}%", cat)));
         interp += cat;
     } else {
         interp += "all devices";
     }
 
     if let Some(ref lvl) = level {
-        sql += &format!(" AND p.level = '{}'", lvl);
+        param_idx += 1;
+        sql += &format!(" AND p.level = ?{}", param_idx);
+        params.push(Box::new(lvl.clone()));
         interp += &format!(" on {}", lvl);
     }
 
     sql += " GROUP BY pt.id ORDER BY qty DESC";
 
-    let rows = doc.query_raw(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref() as &dyn rusqlite::types::ToSql).collect();
+    let rows = doc.query_params(&sql, &param_refs)?;
     Ok(Some(NlqResult { sql, interpretation: interp, rows }))
 }
 
@@ -160,6 +172,9 @@ fn try_equipment_query(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> 
     if q.contains("how many") || q.contains("count") { return Ok(None); } // handled above
 
     let level = extract_level(q);
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut param_idx = 0u32;
+
     let mut sql = String::from(
         "SELECT COALESCE(p.instance_tag, pt.tag) as tag, pt.category, pt.manufacturer, pt.model,
                 p.status, p.level, p.cfm, p.notes
@@ -169,22 +184,38 @@ fn try_equipment_query(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> 
     );
 
     if let Some(ref lvl) = level {
-        sql += &format!(" AND p.level = '{}'", lvl);
+        param_idx += 1;
+        sql += &format!(" AND p.level = ?{}", param_idx);
+        params.push(Box::new(lvl.clone()));
     }
 
-    // Filter by specific equipment type
-    if q.contains("ahu") { sql += " AND pt.category = 'ahu'"; }
-    else if q.contains("rtu") { sql += " AND pt.category = 'rtu'"; }
-    else if q.contains("chiller") { sql += " AND pt.category = 'chiller'"; }
-    else if q.contains("boiler") { sql += " AND pt.category = 'boiler'"; }
-    else if q.contains("pump") { sql += " AND pt.category = 'pump'"; }
-    else if q.contains("fan") { sql += " AND pt.category LIKE '%fan%'"; }
-    else if q.contains("cooling tower") { sql += " AND pt.category = 'cooling_tower'"; }
+    // Filter by specific equipment type — these are hardcoded constants, not user input,
+    // but parameterize for consistency.
+    let equip_cat: Option<String> = if q.contains("ahu") { Some("ahu".into()) }
+        else if q.contains("rtu") { Some("rtu".into()) }
+        else if q.contains("chiller") { Some("chiller".into()) }
+        else if q.contains("boiler") { Some("boiler".into()) }
+        else if q.contains("pump") { Some("pump".into()) }
+        else if q.contains("fan") { Some("%fan%".into()) }
+        else if q.contains("cooling tower") { Some("cooling_tower".into()) }
+        else { None };
+
+    if let Some(cat) = equip_cat {
+        param_idx += 1;
+        let is_like = cat.contains('%');
+        if is_like {
+            sql += &format!(" AND pt.category LIKE ?{}", param_idx);
+        } else {
+            sql += &format!(" AND pt.category = ?{}", param_idx);
+        }
+        params.push(Box::new(cat));
+    }
 
     sql += " ORDER BY tag";
 
-    let rows = doc.query_raw(&sql)?;
-    Ok(Some(NlqResult { sql, interpretation: format!("Equipment list"), rows }))
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref() as &dyn rusqlite::types::ToSql).collect();
+    let rows = doc.query_params(&sql, &param_refs)?;
+    Ok(Some(NlqResult { sql, interpretation: "Equipment list".into(), rows }))
 }
 
 fn try_submittal_query(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
@@ -213,15 +244,18 @@ fn try_room_query(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
     if q.contains("without") || q.contains("missing") || q.contains("no supply") || q.contains("no return") { return Ok(None); }
 
     let level = extract_level(q);
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     let mut sql = String::from(
         "SELECT s.tag, s.name, s.level, s.space_type, s.scope FROM spaces s WHERE 1=1"
     );
     if let Some(ref lvl) = level {
-        sql += &format!(" AND s.level = '{}'", lvl);
+        sql += " AND s.level = ?1";
+        params.push(Box::new(lvl.clone()));
     }
     sql += " ORDER BY s.level, s.tag";
 
-    let rows = doc.query_raw(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref() as &dyn rusqlite::types::ToSql).collect();
+    let rows = doc.query_params(&sql, &param_refs)?;
     Ok(Some(NlqResult { sql, interpretation: "Room list".into(), rows }))
 }
 
@@ -237,18 +271,16 @@ fn try_rooms_missing(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
         else { "exhaust%" };
     let cat_name = if missing_supply { "supply" } else if missing_return { "return" } else { "exhaust" };
 
-    let sql = format!(
-        "SELECT s.tag, s.name, s.level FROM spaces s
+    let sql = "SELECT s.tag, s.name, s.level FROM spaces s
          WHERE s.scope = 'in_contract'
          AND s.id NOT IN (
              SELECT p.space_id FROM placements p
              JOIN product_types pt ON p.product_type_id = pt.id
-             WHERE pt.category LIKE '{}' AND p.space_id IS NOT NULL
+             WHERE pt.category LIKE ?1 AND p.space_id IS NOT NULL
          )
-         ORDER BY s.level, s.tag", category
-    );
+         ORDER BY s.level, s.tag".to_string();
 
-    let rows = doc.query_raw(&sql)?;
+    let rows = doc.query_params(&sql, &[&category as &dyn rusqlite::types::ToSql])?;
     Ok(Some(NlqResult { sql, interpretation: format!("Rooms without {} devices", cat_name), rows }))
 }
 
@@ -270,6 +302,7 @@ fn try_device_list(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
     }
 
     let level = extract_level(q);
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     let mut sql = String::from(
         "SELECT pt.tag, pt.category, COUNT(*) as qty, SUM(p.cfm) as total_cfm, pt.manufacturer, pt.model
          FROM placements p
@@ -277,11 +310,13 @@ fn try_device_list(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
          WHERE p.status = 'new'"
     );
     if let Some(ref lvl) = level {
-        sql += &format!(" AND p.level = '{}'", lvl);
+        sql += " AND p.level = ?1";
+        params.push(Box::new(lvl.clone()));
     }
     sql += " GROUP BY pt.id ORDER BY qty DESC";
 
-    let rows = doc.query_raw(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref() as &dyn rusqlite::types::ToSql).collect();
+    let rows = doc.query_params(&sql, &param_refs)?;
     Ok(Some(NlqResult { sql, interpretation: "Device summary".into(), rows }))
 }
 
@@ -312,19 +347,20 @@ fn try_notes(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
 fn try_generic_search(q: &str, doc: &SedDocument) -> Result<Option<NlqResult>> {
     // Try to find a product type tag or category that matches any word in the query
     let words: Vec<&str> = q.split_whitespace().collect();
-    for word in &words {
-        let upper = word.to_uppercase();
-        let sql = format!(
-            "SELECT pt.tag, pt.category, pt.manufacturer, pt.model, COUNT(*) as qty
+    let sql = "SELECT pt.tag, pt.category, pt.manufacturer, pt.model, COUNT(*) as qty
              FROM placements p JOIN product_types pt ON p.product_type_id = pt.id
-             WHERE UPPER(pt.tag) LIKE '%{}%' OR pt.category LIKE '%{}%'
-             GROUP BY pt.id ORDER BY qty DESC",
-            upper, word
-        );
-        let rows = doc.query_raw(&sql)?;
+             WHERE UPPER(pt.tag) LIKE ?1 OR pt.category LIKE ?2
+             GROUP BY pt.id ORDER BY qty DESC";
+    for word in &words {
+        let upper_pattern = format!("%{}%", word.to_uppercase());
+        let lower_pattern = format!("%{}%", word);
+        let rows = doc.query_params(
+            sql,
+            &[&upper_pattern as &dyn rusqlite::types::ToSql, &lower_pattern],
+        )?;
         if !rows.is_empty() {
             return Ok(Some(NlqResult {
-                sql,
+                sql: sql.into(),
                 interpretation: format!("Search for '{}'", word),
                 rows,
             }));

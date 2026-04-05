@@ -65,12 +65,10 @@ pub fn populate_skims_geometry(doc: &SedDocument) -> Result<()> {
         )?;
 
         // Find space by tag, update coordinates and boundary link
-        // Note: query_raw doesn't accept params, so we use a safe format here.
-        // The tag comes from hardcoded constants, not user input.
-        let tag_escaped = room.tag.replace('\'', "''");
-        let rows = doc.query_raw(&format!(
-            "SELECT id FROM spaces WHERE tag = '{}'", tag_escaped
-        ))?;
+        let rows = doc.query_params(
+            "SELECT id FROM spaces WHERE tag = ?1",
+            &[&room.tag as &dyn rusqlite::types::ToSql],
+        )?;
         if let Some(row) = rows.first() {
             let id = &row[0].1;
             let cx = room.x + room.w / 2.0;
@@ -328,10 +326,10 @@ pub fn get_room_geometry(doc: &SedDocument, level: &str) -> Result<Vec<RoomGeome
 
 /// Get the bounding rectangle for all rooms on a given level.
 pub fn level_bounds(doc: &SedDocument, level: &str) -> Result<(f64, f64, f64, f64)> {
-    let level_escaped = level.replace('\'', "''");
-    let rows = doc.query_raw(&format!(
-        "SELECT MIN(x), MIN(y), MAX(x), MAX(y) FROM spaces WHERE level = '{}' AND x IS NOT NULL", level_escaped
-    ))?;
+    let rows = doc.query_params(
+        "SELECT MIN(x), MIN(y), MAX(x), MAX(y) FROM spaces WHERE level = ?1 AND x IS NOT NULL",
+        &[&level as &dyn rusqlite::types::ToSql],
+    )?;
     if let Some(row) = rows.first() {
         let x_min: f64 = row[0].1.parse().unwrap_or(0.0);
         let y_min: f64 = row[1].1.parse().unwrap_or(0.0);
