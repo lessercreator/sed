@@ -116,6 +116,23 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Get AI-powered design suggestions
+    Suggest {
+        /// Path to .sed file
+        file: String,
+    },
+    /// Create a blank project with the default HVAC equipment catalog
+    Catalog {
+        /// Output path (default: catalog.sed)
+        #[arg(default_value = "catalog.sed")]
+        output: String,
+        /// Project name
+        #[arg(short, long, default_value = "New Project")]
+        name: String,
+        /// Project number
+        #[arg(short = 'N', long, default_value = "000")]
+        number: String,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -149,6 +166,8 @@ fn main() -> Result<()> {
         Commands::ImportCsv { csv, output, name, number } => cmd_import_csv(&csv, &output, &name, &number),
         Commands::Ask { file, question } => cmd_ask(&file, &question),
         Commands::Check { file, json } => cmd_check(&file, json),
+        Commands::Suggest { file } => cmd_suggest(&file),
+        Commands::Catalog { output, name, number } => cmd_catalog(&output, &name, &number),
     }
 }
 
@@ -471,5 +490,34 @@ fn cmd_check(file: &str, json: bool) -> Result<()> {
     if errors > 0 {
         std::process::exit(1);
     }
+    Ok(())
+}
+
+fn cmd_suggest(file: &str) -> Result<()> {
+    let doc = SedDocument::open(file)?;
+    let suggestions = sed_sdk::suggest::suggest(&doc)?;
+    if suggestions.is_empty() {
+        println!("No suggestions — design looks good.");
+    } else {
+        println!("{} suggestion(s):\n", suggestions.len());
+        for s in &suggestions {
+            println!("{}", s);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_catalog(output: &str, name: &str, number: &str) -> Result<()> {
+    println!("Creating blank project with default catalog: {}", output);
+    let doc = SedDocument::create(output)?;
+    doc.set_meta("sed_version", "0.3")?;
+    doc.set_meta("project_name", name)?;
+    doc.set_meta("project_number", number)?;
+
+    let count = sed_sdk::catalog::populate_default_catalog(&doc)?;
+    println!("Populated {} product types.", count);
+
+    let info = doc.info()?;
+    print!("\n{}", info);
     Ok(())
 }
