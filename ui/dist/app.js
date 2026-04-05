@@ -27,8 +27,8 @@ const state = {
 const view = {
     x: 0,
     y: 0,
-    scale: 40,
-    baseScale: 40,
+    scale: 1,
+    baseScale: 1,
 };
 
 const canvas = {
@@ -74,6 +74,29 @@ const equipPlace = {
 };
 
 let animFrameId = null;
+
+// =============================================================================
+// SHEET CONSTANTS (ARCH D — matches export.rs exactly)
+// =============================================================================
+const SHEET = {
+    W: 914.4,       // 36" in mm
+    H: 609.6,       // 24" in mm
+    BORDER: 12.7,   // 1/2" border
+    TB_W: 190.0,    // title block width
+    TB_H: 76.0,     // title block height
+};
+
+// Cached model-to-sheet transform (recomputed each render)
+const sheetXform = {
+    drawLeft: SHEET.BORDER + 15,
+    drawRight: SHEET.W - SHEET.BORDER - 15,
+    drawTop: SHEET.BORDER + 15,
+    drawBottom: SHEET.H - SHEET.BORDER - SHEET.TB_H - 15,
+    drawW: SHEET.W - 2 * SHEET.BORDER - 30,
+    drawH: SHEET.H - 2 * SHEET.BORDER - SHEET.TB_H - 30,
+    modelXMin: 0, modelYMin: 0, modelXMax: 20, modelYMax: 20,
+    scale: 20, xOff: 0, yOff: 0,
+};
 
 const SNAP_GRID = 0.25; // 25cm snap grid (approximately 1 foot = 0.3048m)
 
@@ -549,50 +572,25 @@ function resizeCanvas() {
 }
 
 function fitView() {
-    const allVerts = [];
-    Object.values(state.roomGeometry).forEach(r => {
-        if (r.vertices) r.vertices.forEach(v => allVerts.push(v));
-    });
-    state.placements.filter(p => p.level === state.currentLevel).forEach(p => {
-        const px = parseFloat(p.x), py = parseFloat(p.y);
-        if (!isNaN(px) && !isNaN(py)) allVerts.push({ x: px, y: py });
-    });
-    (state.graph.nodes || []).forEach(n => {
-        const nx = parseFloat(n.x), ny = parseFloat(n.y);
-        if (!isNaN(nx) && !isNaN(ny)) allVerts.push({ x: nx, y: ny });
-    });
-
-    if (allVerts.length === 0) {
-        view.x = canvas.width / 2;
-        view.y = canvas.height / 2;
-        view.scale = 40;
-        state.dirty = true;
-        return;
-    }
-
-    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-    allVerts.forEach(v => {
-        if (v.x < xMin) xMin = v.x;
-        if (v.x > xMax) xMax = v.x;
-        if (v.y < yMin) yMin = v.y;
-        if (v.y > yMax) yMax = v.y;
-    });
-
-    const padding = 60;
-    const w = xMax - xMin || 1;
-    const h = yMax - yMin || 1;
-    const scaleX = (canvas.width - padding * 2) / w;
-    const scaleY = (canvas.height - padding * 2) / h;
-    view.scale = Math.min(scaleX, scaleY, 200);
-    view.x = (canvas.width / 2) - ((xMin + xMax) / 2) * view.scale;
-    view.y = (canvas.height / 2) - ((yMin + yMax) / 2) * view.scale;
+    // Compute the sheet transform first so coordinate conversions work
+    computeSheetTransform();
+    // Fit the sheet into the viewport with padding
+    const padding = 40;
+    const scaleX = (canvas.width - padding * 2) / SHEET.W;
+    const scaleY = (canvas.height - padding * 2) / SHEET.H;
+    view.scale = Math.min(scaleX, scaleY);
+    view.baseScale = view.scale;
+    // Center the sheet (sheet origin is top-left at 0,0 in sheet-mm space)
+    view.x = (canvas.width - SHEET.W * view.scale) / 2;
+    view.y = (canvas.height - SHEET.H * view.scale) / 2;
     state.dirty = true;
 }
 
 // =============================================================================
 // CANVAS INTERACTION
 // =============================================================================
-function screenToWorld(sx, sy) {
+function screenToSheet(sx, sy) {
+    // Screen pixels -> sheet mm
     const rect = canvas.el.getBoundingClientRect();
     const cx = sx - rect.left;
     const cy = sy - rect.top;
@@ -602,10 +600,36 @@ function screenToWorld(sx, sy) {
     };
 }
 
-function worldToScreen(wx, wy) {
+function sheetToModel(smx, smy) {
+    // Sheet mm -> model meters (inverse of model-to-sheet transform)
+    // On canvas: sheet Y increases downward. Model Y increases upward.
+    // So model yMin maps to drawBottom (high sheet Y), model yMax maps to drawTop (low sheet Y).
+    const sf = sheetXform;
+    const mx = (smx - sf.drawLeft) / sf.scale + sf.xOff;
+    const my = (sf.drawBottom - smy) / sf.scale + sf.yOff;
+    return { x: mx, y: my };
+}
+
+function modelToSheet(mx, my) {
+    // Model meters -> sheet mm
+    // Model Y up = sheet Y decreasing (toward top of page)
+    const sf = sheetXform;
     return {
-        x: wx * view.scale + view.x,
-        y: wy * view.scale + view.y,
+        x: sf.drawLeft + (mx - sf.xOff) * sf.scale,
+        y: sf.drawBottom - (my - sf.yOff) * sf.scale,
+    };
+}
+
+function screenToWorld(sx, sy) {
+    const sm = screenToSheet(sx, sy);
+    return sheetToModel(sm.x, sm.y);
+}
+
+function worldToScreen(wx, wy) {
+    const sm = modelToSheet(wx, wy);
+    return {
+        x: sm.x * view.scale + view.x,
+        y: sm.y * view.scale + view.y,
     };
 }
 
@@ -762,7 +786,8 @@ async function onCanvasDrop(e) {
 }
 
 function updateZoomDisplay() {
-    document.getElementById('st-zoom').textContent = `${(view.scale / view.baseScale * 100).toFixed(0)}%`;
+    const base = view.baseScale || view.scale || 1;
+    document.getElementById('st-zoom').textContent = `${(view.scale / base * 100).toFixed(0)}%`;
 }
 
 function getCursorForTool() {
@@ -1040,73 +1065,265 @@ function startRenderLoop() {
     frame();
 }
 
+function computeSheetTransform() {
+    // Drawing area within the sheet (mm) — matches export.rs
+    // In export.rs (PDF, Y up): draw_left=B+15, draw_bottom=B+TB_H+15, draw_right=W-B-15, draw_top=H-B-15
+    // On canvas (Y down): we map PDF Y to canvas Y by: canvas_y = SHEET.H - pdf_y
+    const B = SHEET.BORDER;
+    const sf = sheetXform;
+    sf.drawLeft = B + 15;                           // same as PDF
+    sf.drawRight = SHEET.W - B - 15;                // same as PDF
+    sf.drawTop = B + 15;                             // canvas top = SHEET.H - (H-B-15) = B+15
+    sf.drawBottom = SHEET.H - B - SHEET.TB_H - 15;  // canvas bottom = SHEET.H - (B+TB_H+15)
+    sf.drawW = sf.drawRight - sf.drawLeft;
+    sf.drawH = sf.drawBottom - sf.drawTop;
+
+    // Gather model bounds
+    let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
+    Object.values(state.roomGeometry).forEach(r => {
+        if (r.vertices) r.vertices.forEach(v => {
+            xMin = Math.min(xMin, v.x); yMin = Math.min(yMin, v.y);
+            xMax = Math.max(xMax, v.x); yMax = Math.max(yMax, v.y);
+        });
+    });
+    state.placements.filter(p => p.level === state.currentLevel).forEach(p => {
+        const px = parseFloat(p.x), py = parseFloat(p.y);
+        if (!isNaN(px) && !isNaN(py)) {
+            xMin = Math.min(xMin, px); yMin = Math.min(yMin, py);
+            xMax = Math.max(xMax, px); yMax = Math.max(yMax, py);
+        }
+    });
+    (state.graph.nodes || []).forEach(n => {
+        const nx = parseFloat(n.x), ny = parseFloat(n.y);
+        if (!isNaN(nx) && !isNaN(ny)) {
+            xMin = Math.min(xMin, nx); yMin = Math.min(yMin, ny);
+            xMax = Math.max(xMax, nx); yMax = Math.max(yMax, ny);
+        }
+    });
+    if (xMin === Infinity) { xMin = 0; yMin = 0; xMax = 20; yMax = 20; }
+
+    // Padding in model meters
+    const pad = 1.0;
+    xMin -= pad; yMin -= pad; xMax += pad; yMax += pad;
+
+    sf.modelXMin = xMin; sf.modelYMin = yMin;
+    sf.modelXMax = xMax; sf.modelYMax = yMax;
+
+    const modelW = xMax - xMin;
+    const modelH = yMax - yMin;
+
+    // Scale: mm per meter. Match export.rs logic:
+    // scale = min(drawW / (modelW * 1000), drawH / (modelH * 1000)) * 1000
+    // Simplifies to: min(drawW / modelW, drawH / modelH) in mm/m
+    // But export.rs multiplies model in meters * 1000 to get mm, then fits.
+    // Actually looking at export.rs: model_w is in meters (f32), scale computed as:
+    //   scale = min(draw_w / (model_w * 1000.0), draw_h / (model_h * 1000.0)) * 1000.0
+    // Which gives: scale = min(draw_w / model_w, draw_h / model_h)  (mm per meter)
+    // Then tx(x) = draw_left + (x - x_off) * scale
+    sf.scale = Math.min(sf.drawW / modelW, sf.drawH / modelH);
+    sf.xOff = xMin;
+    sf.yOff = yMin;
+}
+
 function render() {
     const ctx = canvas.ctx;
     if (!ctx) return;
     const W = canvas.width, H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
+
+    // Dark background
+    ctx.fillStyle = '#1a1a1e';
+    ctx.fillRect(0, 0, W, H);
+
+    // Compute model-to-sheet transform
+    computeSheetTransform();
+
     ctx.save();
     ctx.translate(view.x, view.y);
     ctx.scale(view.scale, view.scale);
 
-    drawGrid(ctx, W, H);
-    drawRooms(ctx);
-    drawSegments(ctx);
-    drawNodes(ctx);
-    drawPlacements(ctx);
+    // White sheet
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, SHEET.W, SHEET.H);
+
+    drawSheetBorder(ctx);
+    drawTitleBlock(ctx);
+    drawScaleBar(ctx);
+    drawNorthArrow(ctx);
+    drawSheetRooms(ctx);
+    drawSheetSegments(ctx);
+    drawSheetNodes(ctx);
+    drawSheetPlacements(ctx);
     drawRoomDrawPreview(ctx);
     drawDuctDrawPreview(ctx);
-    drawLevelLabel(ctx);
 
     ctx.restore();
 }
 
-function drawGrid(ctx, W, H) {
-    const invScale = 1 / view.scale;
-    const x0 = -view.x * invScale;
-    const y0 = -view.y * invScale;
-    const x1 = x0 + W * invScale;
-    const y1 = y0 + H * invScale;
+// -------------------------------------------------------------------------
+// SHEET BORDER (double line, matches export.rs)
+// -------------------------------------------------------------------------
+function drawSheetBorder(ctx) {
+    const B = SHEET.BORDER;
 
-    let step = 1;
-    if (view.scale < 10) step = 5;
-    if (view.scale < 3) step = 10;
+    // Outer border
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 0.75;
+    ctx.strokeRect(B, B, SHEET.W - 2 * B, SHEET.H - 2 * B);
 
-    ctx.strokeStyle = '#1a1a1a';
-    ctx.lineWidth = 0.02;
-    ctx.beginPath();
-    const gx0 = Math.floor(x0 / step) * step;
-    const gy0 = Math.floor(y0 / step) * step;
-    for (let x = gx0; x <= x1; x += step) {
-        ctx.moveTo(x, y0);
-        ctx.lineTo(x, y1);
-    }
-    for (let y = gy0; y <= y1; y += step) {
-        ctx.moveTo(x0, y);
-        ctx.lineTo(x1, y);
-    }
-    ctx.stroke();
-
-    if (view.scale > 20) {
-        ctx.strokeStyle = '#222';
-        ctx.lineWidth = 0.01;
-        ctx.beginPath();
-        const majorStep = step * 5;
-        const mx0 = Math.floor(x0 / majorStep) * majorStep;
-        const my0 = Math.floor(y0 / majorStep) * majorStep;
-        for (let x = mx0; x <= x1; x += majorStep) {
-            ctx.moveTo(x, y0);
-            ctx.lineTo(x, y1);
-        }
-        for (let y = my0; y <= y1; y += majorStep) {
-            ctx.moveTo(x0, y);
-            ctx.lineTo(x1, y);
-        }
-        ctx.stroke();
-    }
+    // Inner border
+    ctx.lineWidth = 0.25;
+    ctx.strokeRect(B + 2, B + 2, SHEET.W - 2 * B - 4, SHEET.H - 2 * B - 4);
 }
 
-function drawRooms(ctx) {
+// -------------------------------------------------------------------------
+// TITLE BLOCK (bottom right, matches export.rs)
+// -------------------------------------------------------------------------
+function drawTitleBlock(ctx) {
+    const B = SHEET.BORDER;
+    const tbX = SHEET.W - B - SHEET.TB_W;
+    const tbY = SHEET.H - B - SHEET.TB_H - 2;  // near bottom of sheet (high Y = bottom on screen)
+
+    // Title block border
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(tbX, tbY, SHEET.TB_W - 2, SHEET.TB_H);
+
+    // Horizontal dividers
+    const rowH = 15;
+    const rows = [tbY + rowH, tbY + rowH * 2, tbY + rowH * 3, tbY + rowH * 4];
+    ctx.lineWidth = 0.15;
+    rows.forEach(ry => {
+        ctx.beginPath();
+        ctx.moveTo(tbX, ry);
+        ctx.lineTo(tbX + SHEET.TB_W - 2, ry);
+        ctx.stroke();
+    });
+
+    // Vertical divider
+    const labelW = 45;
+    ctx.beginPath();
+    ctx.moveTo(tbX + labelW, tbY);
+    ctx.lineTo(tbX + labelW, tbY + SHEET.TB_H);
+    ctx.stroke();
+
+    // Text sizes in mm
+    const small = 5, medium = 7, large = 10;
+
+    // Row 1: Project name
+    ctx.fillStyle = '#808080';
+    ctx.font = `${small}px Helvetica, Arial, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('PROJECT', tbX + 3, tbY + 3);
+    ctx.fillStyle = '#000000';
+    ctx.font = `bold ${large}px Helvetica, Arial, sans-serif`;
+    ctx.fillText(state.info.project_name || 'Untitled', tbX + labelW + 3, tbY + 3);
+
+    // Row 2: Project number
+    ctx.fillStyle = '#808080';
+    ctx.font = `${small}px Helvetica, Arial, sans-serif`;
+    ctx.fillText('PROJECT NO.', tbX + 3, rows[0] + 3);
+    ctx.fillStyle = '#000000';
+    ctx.font = `${medium}px Helvetica, Arial, sans-serif`;
+    ctx.fillText(state.info.project_number || '', tbX + labelW + 3, rows[0] + 4);
+
+    // Row 3: Sheet title
+    ctx.fillStyle = '#808080';
+    ctx.font = `${small}px Helvetica, Arial, sans-serif`;
+    ctx.fillText('SHEET TITLE', tbX + 3, rows[1] + 3);
+    ctx.fillStyle = '#000000';
+    ctx.font = `bold ${medium}px Helvetica, Arial, sans-serif`;
+    ctx.fillText(state.currentLevel, tbX + labelW + 3, rows[1] + 4);
+
+    // Row 4: Sheet number
+    ctx.fillStyle = '#808080';
+    ctx.font = `${small}px Helvetica, Arial, sans-serif`;
+    ctx.fillText('SHEET NO.', tbX + 3, rows[2] + 3);
+    ctx.fillStyle = '#000000';
+    ctx.font = `bold ${large}px Helvetica, Arial, sans-serif`;
+    const sheetIdx = state.levels.indexOf(state.currentLevel);
+    const sheetNum = 'M-' + String(101 + (sheetIdx >= 0 ? sheetIdx : 0));
+    ctx.fillText(sheetNum, tbX + labelW + 3, rows[2] + 3);
+
+    // Row 5: Generated
+    ctx.fillStyle = '#808080';
+    ctx.font = `${small}px Helvetica, Arial, sans-serif`;
+    ctx.fillText('GENERATED', tbX + 3, rows[3] + 3);
+    ctx.fillStyle = '#000000';
+    ctx.fillText('From .sed file \u2014 Structured Engineering Document', tbX + labelW + 3, rows[3] + 3);
+
+    ctx.textBaseline = 'alphabetic';
+}
+
+// -------------------------------------------------------------------------
+// SCALE BAR (bottom left of drawing area, matches export.rs)
+// -------------------------------------------------------------------------
+function drawScaleBar(ctx) {
+    const sf = sheetXform;
+    const scaleM = 1.0 / sf.scale; // meters per mm
+    const barLenM = Math.ceil(5.0 * scaleM);
+    const barLenMm = barLenM / scaleM;
+    const barX = sf.drawLeft;
+    const barY = SHEET.H - SHEET.BORDER - SHEET.TB_H - 2 - 8; // above title block
+
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(barX, barY);
+    ctx.lineTo(barX + barLenMm, barY);
+    ctx.stroke();
+
+    // Tick marks
+    for (let i = 0; i <= barLenM; i++) {
+        const tickX = barX + (i / barLenM) * barLenMm;
+        ctx.beginPath();
+        ctx.moveTo(tickX, barY - 1.5);
+        ctx.lineTo(tickX, barY + 1.5);
+        ctx.stroke();
+    }
+
+    ctx.fillStyle = '#4d4d4d';
+    ctx.font = '5px Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('0', barX - 1, barY - 2);
+    ctx.fillText(barLenM + 'm', barX + barLenMm - 3, barY - 2);
+    ctx.textBaseline = 'alphabetic';
+}
+
+// -------------------------------------------------------------------------
+// NORTH ARROW (top right of drawing area, matches export.rs)
+// -------------------------------------------------------------------------
+function drawNorthArrow(ctx) {
+    const sf = sheetXform;
+    const naX = sf.drawRight - 15;
+    const naY = sf.drawTop + 15;
+
+    ctx.fillStyle = '#000000';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 0.3;
+
+    // Arrow pointing up (negative Y on screen = up on sheet)
+    ctx.beginPath();
+    ctx.moveTo(naX, naY - 10);      // tip (top)
+    ctx.lineTo(naX + 3, naY);        // bottom right
+    ctx.lineTo(naX, naY - 3);        // notch
+    ctx.lineTo(naX - 3, naY);        // bottom left
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.font = 'bold 7px Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('N', naX, naY - 11);
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+}
+
+// -------------------------------------------------------------------------
+// DRAW ROOMS on sheet
+// -------------------------------------------------------------------------
+function drawSheetRooms(ctx) {
     const ls = state.spaces.filter(s => s.level === state.currentLevel);
 
     ls.forEach(s => {
@@ -1116,183 +1333,238 @@ function drawRooms(ctx) {
         const isNic = s.scope === 'nic';
         const isSel = state.selectedElement && state.selectedElement.id === s.id;
 
-        ctx.fillStyle = isNic ? '#15151580' : isSel ? '#1a2a3a80' : '#4a9eff08';
-        ctx.beginPath();
-        ctx.moveTo(verts[0].x, verts[0].y);
-        for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x, verts[i].y);
-        ctx.closePath();
-        ctx.fill();
+        // Convert all vertices to sheet mm
+        const sv = verts.map(v => modelToSheet(v.x, v.y));
 
-        ctx.strokeStyle = isSel ? '#4a9eff' : isNic ? '#333333' : '#4a9eff30';
-        ctx.lineWidth = isSel ? 0.06 : 0.03;
+        // Selection highlight fill
+        if (isSel) {
+            ctx.fillStyle = '#d0e4ff40';
+            ctx.beginPath();
+            ctx.moveTo(sv[0].x, sv[0].y);
+            for (let i = 1; i < sv.length; i++) ctx.lineTo(sv[i].x, sv[i].y);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // Outline
+        const color = isNic ? '#b0b0b0' : '#000000';
+        ctx.strokeStyle = isSel ? '#2060c0' : color;
+        ctx.lineWidth = isSel ? 0.6 : (isNic ? 0.15 : 0.35);
         ctx.beginPath();
-        ctx.moveTo(verts[0].x, verts[0].y);
-        for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x, verts[i].y);
+        ctx.moveTo(sv[0].x, sv[0].y);
+        for (let i = 1; i < sv.length; i++) ctx.lineTo(sv[i].x, sv[i].y);
         ctx.closePath();
         ctx.stroke();
 
-        const cx = verts.reduce((s, v) => s + v.x, 0) / verts.length;
-        const cy = verts.reduce((s, v) => s + v.y, 0) / verts.length;
+        // Room label at centroid
+        const cx = sv.reduce((s, v) => s + v.x, 0) / sv.length;
+        const cy = sv.reduce((s, v) => s + v.y, 0) / sv.length;
 
-        ctx.fillStyle = isNic ? '#444' : '#888';
-        ctx.font = `${0.25}px system-ui`;
+        ctx.fillStyle = '#4d4d4d';
+        ctx.font = 'bold 5px Helvetica, Arial, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(s.tag, cx, cy - 0.1);
+        ctx.textBaseline = 'middle';
+        ctx.fillText(s.tag, cx, cy - 3);
 
-        ctx.fillStyle = isNic ? '#555' : '#ccc';
-        ctx.font = `bold ${0.3}px system-ui`;
-        ctx.fillText(s.name, cx, cy + 0.25);
+        ctx.fillStyle = '#000000';
+        ctx.font = '4px Helvetica, Arial, sans-serif';
+        ctx.fillText(s.name, cx, cy + 3);
         ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
     });
 }
 
-function drawSegments(ctx) {
+// -------------------------------------------------------------------------
+// DRAW DUCT SEGMENTS on sheet
+// -------------------------------------------------------------------------
+function drawSheetSegments(ctx) {
     const segs = state.graph.segments || [];
+    const sf = sheetXform;
+
     segs.forEach(seg => {
-        const x1 = parseFloat(seg.x1), y1 = parseFloat(seg.y1);
-        const x2 = parseFloat(seg.x2), y2 = parseFloat(seg.y2);
-        if (isNaN(x1) || isNaN(y1) || isNaN(x2) || isNaN(y2)) return;
+        const mx1 = parseFloat(seg.x1), my1 = parseFloat(seg.y1);
+        const mx2 = parseFloat(seg.x2), my2 = parseFloat(seg.y2);
+        if (isNaN(mx1) || isNaN(my1) || isNaN(mx2) || isNaN(my2)) return;
+
+        const s1 = modelToSheet(mx1, my1);
+        const s2 = modelToSheet(mx2, my2);
 
         const diam = parseFloat(seg.diameter_m) || 0.2;
-        const lineW = Math.max(diam * 0.8, 0.04);
+        // Line width proportional to diameter, in sheet-mm
+        const lineW = Math.max(diam * sf.scale * 0.8, 0.2);
 
-        const sysTag = seg.system_tag || '';
-        if (sysTag.toLowerCase().includes('exhaust') || sysTag.toLowerCase().includes('ex')) {
-            ctx.strokeStyle = '#f4433660';
-        } else if (sysTag.toLowerCase().includes('return') || sysTag.toLowerCase().includes('ra')) {
-            ctx.strokeStyle = '#4caf5060';
-        } else {
-            ctx.strokeStyle = '#66666680';
-        }
+        ctx.strokeStyle = '#666666';
         ctx.lineWidth = lineW;
         ctx.lineCap = 'round';
         ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
+        ctx.moveTo(s1.x, s1.y);
+        ctx.lineTo(s2.x, s2.y);
         ctx.stroke();
 
-        const mx = (x1 + x2) / 2;
-        const my = (y1 + y2) / 2;
-        const angle = Math.atan2(y2 - y1, x2 - x1);
-        const arrowLen = 0.15;
-        ctx.fillStyle = ctx.strokeStyle;
+        // Flow direction arrow
+        const smx = (s1.x + s2.x) / 2;
+        const smy = (s1.y + s2.y) / 2;
+        const angle = Math.atan2(s2.y - s1.y, s2.x - s1.x);
+        const arrowLen = Math.max(lineW * 2, 2);
+        ctx.fillStyle = '#666666';
         ctx.beginPath();
-        ctx.moveTo(mx + Math.cos(angle) * arrowLen, my + Math.sin(angle) * arrowLen);
-        ctx.lineTo(mx + Math.cos(angle + 2.5) * arrowLen * 0.5, my + Math.sin(angle + 2.5) * arrowLen * 0.5);
-        ctx.lineTo(mx + Math.cos(angle - 2.5) * arrowLen * 0.5, my + Math.sin(angle - 2.5) * arrowLen * 0.5);
+        ctx.moveTo(smx + Math.cos(angle) * arrowLen, smy + Math.sin(angle) * arrowLen);
+        ctx.lineTo(smx + Math.cos(angle + 2.5) * arrowLen * 0.5, smy + Math.sin(angle + 2.5) * arrowLen * 0.5);
+        ctx.lineTo(smx + Math.cos(angle - 2.5) * arrowLen * 0.5, smy + Math.sin(angle - 2.5) * arrowLen * 0.5);
         ctx.closePath();
         ctx.fill();
     });
 }
 
-function drawNodes(ctx) {
+// -------------------------------------------------------------------------
+// DRAW NODES on sheet
+// -------------------------------------------------------------------------
+function drawSheetNodes(ctx) {
     const nodes = state.graph.nodes || [];
     nodes.forEach(n => {
         const nx = parseFloat(n.x), ny = parseFloat(n.y);
         if (isNaN(nx) || isNaN(ny)) return;
 
+        const sn = modelToSheet(nx, ny);
         const isSel = state.selectedElement && state.selectedElement.id === n.id;
-        const size = 0.08;
+        const size = 0.8; // mm
 
         if (isSel) {
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 0.04;
-            ctx.strokeRect(nx - size * 1.5, ny - size * 1.5, size * 3, size * 3);
+            ctx.strokeStyle = '#2060c0';
+            ctx.lineWidth = 0.4;
+            ctx.strokeRect(sn.x - size * 1.5, sn.y - size * 1.5, size * 3, size * 3);
         }
 
-        ctx.fillStyle = '#888';
-        ctx.fillRect(nx - size, ny - size, size * 2, size * 2);
+        ctx.fillStyle = '#888888';
+        ctx.fillRect(sn.x - size, sn.y - size, size * 2, size * 2);
     });
 }
 
-function drawPlacements(ctx) {
+// -------------------------------------------------------------------------
+// DRAW PLACEMENTS on sheet (octagons for devices, diamonds for equipment)
+// -------------------------------------------------------------------------
+function drawSheetPlacements(ctx) {
     const lp = state.placements.filter(p => p.level === state.currentLevel);
 
     lp.forEach(p => {
         const px = parseFloat(p.x), py = parseFloat(p.y);
         if (isNaN(px) || isNaN(py)) return;
 
-        let color = '#4a9eff';
-        const cat = (p.category || '').toLowerCase();
+        const sp = modelToSheet(px, py);
         const dom = (p.domain || '').toLowerCase();
-        if (cat.includes('return') || cat.includes('return_grille')) color = '#4caf50';
-        if (cat.includes('exhaust')) color = '#f44336';
-        if (cat.includes('transfer')) color = '#ff9800';
-        if (dom === 'equipment') color = '#e040fb';
-        if (dom === 'accessory') color = '#ffeb3b';
-
+        const cat = (p.category || '').toLowerCase();
         const cfmVal = parseFloat(p.cfm) || 0;
-        const baseR = 0.12;
-        const r = cfmVal > 0 ? baseR + Math.min(cfmVal / 2000, 0.15) : baseR;
+
+        // Radius in sheet mm
+        const r = dom === 'equipment' ? 2.5 : 1.5;
 
         const isSel = state.selectedElement && state.selectedElement.id === p.id;
 
-        if (isSel) {
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 0.05;
+        // Color matching export.rs greyscale logic
+        let color;
+        if (dom === 'equipment') {
+            color = '#000000';
+        } else if (dom === 'accessory') {
+            color = '#4d4d4d';
+        } else if (cat.includes('return') || cat.includes('exhaust')) {
+            color = '#333333';
+        } else {
+            color = '#000000';
+        }
+
+        ctx.strokeStyle = isSel ? '#2060c0' : color;
+        ctx.lineWidth = isSel ? 0.5 : 0.3;
+
+        if (dom === 'equipment') {
+            // Diamond
             ctx.beginPath();
-            ctx.arc(px, py, r + 0.08, 0, Math.PI * 2);
+            ctx.moveTo(sp.x, sp.y - r);
+            ctx.lineTo(sp.x + r, sp.y);
+            ctx.lineTo(sp.x, sp.y + r);
+            ctx.lineTo(sp.x - r, sp.y);
+            ctx.closePath();
+            ctx.stroke();
+        } else {
+            // Octagon (8-sided circle approximation, matching export.rs)
+            const n = 8;
+            ctx.beginPath();
+            for (let i = 0; i < n; i++) {
+                const angle = Math.PI * 2 * i / n;
+                const ox = sp.x + r * Math.cos(angle);
+                const oy = sp.y + r * Math.sin(angle);
+                if (i === 0) ctx.moveTo(ox, oy);
+                else ctx.lineTo(ox, oy);
+            }
+            ctx.closePath();
             ctx.stroke();
         }
 
-        ctx.fillStyle = color;
-        if (dom === 'equipment') {
+        // Selection ring
+        if (isSel) {
+            ctx.strokeStyle = '#2060c0';
+            ctx.lineWidth = 0.3;
+            ctx.setLineDash([1, 1]);
             ctx.beginPath();
-            ctx.moveTo(px, py - r * 1.3);
-            ctx.lineTo(px + r * 1.3, py);
-            ctx.lineTo(px, py + r * 1.3);
-            ctx.lineTo(px - r * 1.3, py);
-            ctx.closePath();
-            ctx.fill();
-        } else {
-            ctx.beginPath();
-            ctx.arc(px, py, r, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.arc(sp.x, sp.y, r + 1.5, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
         }
 
+        // Tag + CFM label
+        ctx.fillStyle = '#333333';
+        ctx.font = '3.5px Helvetica, Arial, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const tag = p.tag || '';
         if (cfmVal > 0) {
-            ctx.fillStyle = '#888';
-            ctx.font = '0.18px system-ui';
-            ctx.textAlign = 'left';
-            ctx.fillText(String(Math.round(cfmVal)), px + r + 0.08, py + 0.06);
+            ctx.fillText(tag, sp.x + r + 1, sp.y - 1.5);
+            ctx.fillText(Math.round(cfmVal) + ' CFM', sp.x + r + 1, sp.y + 2);
+        } else {
+            ctx.fillText(tag, sp.x + r + 1, sp.y);
         }
+        ctx.textBaseline = 'alphabetic';
     });
 }
 
+// -------------------------------------------------------------------------
+// DRAW ROOM PREVIEW (during room-draw tool) — in sheet coordinates
+// -------------------------------------------------------------------------
 function drawRoomDrawPreview(ctx) {
     if (!roomDraw.active || roomDraw.vertices.length === 0) return;
 
-    ctx.strokeStyle = '#4a9eff';
-    ctx.lineWidth = 0.04;
-    ctx.setLineDash([0.1, 0.1]);
+    const sv = roomDraw.vertices.map(v => modelToSheet(v.x, v.y));
+    const sm = modelToSheet(mouse.worldX, mouse.worldY);
+
+    ctx.strokeStyle = '#2060c0';
+    ctx.lineWidth = 0.4;
+    ctx.setLineDash([2, 2]);
     ctx.beginPath();
-    ctx.moveTo(roomDraw.vertices[0].x, roomDraw.vertices[0].y);
-    for (let i = 1; i < roomDraw.vertices.length; i++) {
-        ctx.lineTo(roomDraw.vertices[i].x, roomDraw.vertices[i].y);
-    }
-    ctx.lineTo(mouse.worldX, mouse.worldY);
+    ctx.moveTo(sv[0].x, sv[0].y);
+    for (let i = 1; i < sv.length; i++) ctx.lineTo(sv[i].x, sv[i].y);
+    ctx.lineTo(sm.x, sm.y);
     ctx.stroke();
     ctx.setLineDash([]);
 
-    roomDraw.vertices.forEach(v => {
-        ctx.fillStyle = '#4a9eff';
+    sv.forEach(v => {
+        ctx.fillStyle = '#2060c0';
         ctx.beginPath();
-        ctx.arc(v.x, v.y, 0.06, 0, Math.PI * 2);
+        ctx.arc(v.x, v.y, 0.8, 0, Math.PI * 2);
         ctx.fill();
     });
 
-    if (roomDraw.vertices.length >= 3) {
-        ctx.fillStyle = '#4a9eff15';
+    if (sv.length >= 3) {
+        ctx.fillStyle = '#2060c018';
         ctx.beginPath();
-        ctx.moveTo(roomDraw.vertices[0].x, roomDraw.vertices[0].y);
-        for (let i = 1; i < roomDraw.vertices.length; i++) {
-            ctx.lineTo(roomDraw.vertices[i].x, roomDraw.vertices[i].y);
-        }
+        ctx.moveTo(sv[0].x, sv[0].y);
+        for (let i = 1; i < sv.length; i++) ctx.lineTo(sv[i].x, sv[i].y);
         ctx.closePath();
         ctx.fill();
     }
 }
 
+// -------------------------------------------------------------------------
+// DRAW DUCT PREVIEW (during duct-draw tool) — in sheet coordinates
+// -------------------------------------------------------------------------
 function drawDuctDrawPreview(ctx) {
     if (!ductDraw.active || ductDraw.nodes.length === 0) return;
     const lastNode = (state.graph.nodes || []).find(n => n.id === ductDraw.nodes[ductDraw.nodes.length - 1]);
@@ -1301,24 +1573,17 @@ function drawDuctDrawPreview(ctx) {
     const lx = parseFloat(lastNode.x), ly = parseFloat(lastNode.y);
     if (isNaN(lx) || isNaN(ly)) return;
 
-    ctx.strokeStyle = '#4a9eff80';
-    ctx.lineWidth = 0.04;
-    ctx.setLineDash([0.1, 0.1]);
+    const s1 = modelToSheet(lx, ly);
+    const s2 = modelToSheet(mouse.worldX, mouse.worldY);
+
+    ctx.strokeStyle = '#2060c080';
+    ctx.lineWidth = 0.4;
+    ctx.setLineDash([2, 2]);
     ctx.beginPath();
-    ctx.moveTo(lx, ly);
-    ctx.lineTo(mouse.worldX, mouse.worldY);
+    ctx.moveTo(s1.x, s1.y);
+    ctx.lineTo(s2.x, s2.y);
     ctx.stroke();
     ctx.setLineDash([]);
-}
-
-function drawLevelLabel(ctx) {
-    ctx.fillStyle = '#333';
-    ctx.font = 'bold 0.5px system-ui';
-    ctx.textAlign = 'left';
-    const invScale = 1 / view.scale;
-    const x = (-view.x) * invScale + 0.5;
-    const y = (-view.y) * invScale + 0.8;
-    ctx.fillText(state.currentLevel, x, y);
 }
 
 // =============================================================================
