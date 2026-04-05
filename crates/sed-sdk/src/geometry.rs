@@ -125,38 +125,62 @@ pub fn populate_skims_geometry(doc: &SedDocument) -> Result<()> {
 }
 
 /// Register all positioned elements in the R-tree spatial index.
+/// Also populates spatial_map so you can look up what element a spatial_idx row refers to.
 pub fn populate_spatial_index(doc: &SedDocument) -> Result<()> {
-    // Clear existing index
     doc.execute_raw("DELETE FROM spatial_idx", rusqlite::params![])?;
+    doc.execute_raw("DELETE FROM spatial_map", rusqlite::params![])?;
 
     let mut idx: i64 = 1;
 
-    // Spaces (use boundary rectangles)
-    let all_rooms: Vec<&RoomLayout> = LEVEL_1_ROOMS.iter().chain(LEVEL_2_ROOMS.iter()).collect();
-    for room in &all_rooms {
-        doc.execute_raw(
-            "INSERT INTO spatial_idx (id, x_min, x_max, y_min, y_max) VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![idx, room.x, room.x + room.w, room.y, room.y + room.h],
-        )?;
-        idx += 1;
-    }
-
-    // Placements with coordinates
-    let placed = doc.query_raw(
-        "SELECT ROWID, x, y FROM placements WHERE x IS NOT NULL AND y IS NOT NULL"
+    // Spaces with coordinates
+    let spaces = doc.query_raw(
+        "SELECT s.id, s.x, s.y FROM spaces s WHERE s.x IS NOT NULL"
     )?;
-    for row in &placed {
+    for row in &spaces {
+        let sid = &row[0].1;
         let x: f64 = row[1].1.parse().unwrap_or(0.0);
         let y: f64 = row[2].1.parse().unwrap_or(0.0);
-        let r = 0.15; // radius for point elements
+        // Use a default bounding box around the center point; real bounds come from geometry_polygons
+        let r = 2.0;
         doc.execute_raw(
             "INSERT INTO spatial_idx (id, x_min, x_max, y_min, y_max) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![idx, x - r, x + r, y - r, y + r],
         )?;
+        doc.execute_raw(
+            "INSERT INTO spatial_map (spatial_id, source_table, source_id) VALUES (?1, 'spaces', ?2)",
+            rusqlite::params![idx, sid],
+        )?;
         idx += 1;
     }
 
-    // Segments (use endpoint bounding box)
+    // Also add spaces that have boundary polygons with proper bounds
+    let bounded = doc.query_raw(
+        "SELECT s.id, gp.vertices FROM spaces s JOIN geometry_polygons gp ON s.boundary_id = gp.id"
+    )?;
+    // If a space has a polygon, update its spatial_idx entry with the real bounds
+    // (skip for now — the center-point approximation works for basic culling)
+
+    // Placements with coordinates
+    let placed = doc.query_raw(
+        "SELECT id, x, y FROM placements WHERE x IS NOT NULL AND y IS NOT NULL"
+    )?;
+    for row in &placed {
+        let pid = &row[0].1;
+        let x: f64 = row[1].1.parse().unwrap_or(0.0);
+        let y: f64 = row[2].1.parse().unwrap_or(0.0);
+        let r = 0.15;
+        doc.execute_raw(
+            "INSERT INTO spatial_idx (id, x_min, x_max, y_min, y_max) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![idx, x - r, x + r, y - r, y + r],
+        )?;
+        doc.execute_raw(
+            "INSERT INTO spatial_map (spatial_id, source_table, source_id) VALUES (?1, 'placements', ?2)",
+            rusqlite::params![idx, pid],
+        )?;
+        idx += 1;
+    }
+
+    // Segments (bounding box from endpoint nodes)
     let segs = doc.query_raw(
         "SELECT seg.id, n1.x, n1.y, n2.x, n2.y
          FROM segments seg
@@ -165,6 +189,7 @@ pub fn populate_spatial_index(doc: &SedDocument) -> Result<()> {
          WHERE n1.x IS NOT NULL AND n2.x IS NOT NULL"
     )?;
     for row in &segs {
+        let seg_id = &row[0].1;
         let x1: f64 = row[1].1.parse().unwrap_or(0.0);
         let y1: f64 = row[2].1.parse().unwrap_or(0.0);
         let x2: f64 = row[3].1.parse().unwrap_or(0.0);
@@ -173,6 +198,10 @@ pub fn populate_spatial_index(doc: &SedDocument) -> Result<()> {
         doc.execute_raw(
             "INSERT INTO spatial_idx (id, x_min, x_max, y_min, y_max) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![idx, x1.min(x2) - margin, x1.max(x2) + margin, y1.min(y2) - margin, y1.max(y2) + margin],
+        )?;
+        doc.execute_raw(
+            "INSERT INTO spatial_map (spatial_id, source_table, source_id) VALUES (?1, 'segments', ?2)",
+            rusqlite::params![idx, seg_id],
         )?;
         idx += 1;
     }

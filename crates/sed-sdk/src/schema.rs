@@ -320,6 +320,13 @@ pub fn create_schema(conn: &Connection) -> Result<()> {
             x_min, x_max,
             y_min, y_max
         );
+
+        -- Maps spatial_idx integer IDs back to source elements
+        CREATE TABLE IF NOT EXISTS spatial_map (
+            spatial_id  INTEGER PRIMARY KEY,
+            source_table TEXT NOT NULL,  -- 'spaces', 'placements', 'segments'
+            source_id   TEXT NOT NULL    -- UUID of the source element
+        );
         "
     )?;
 

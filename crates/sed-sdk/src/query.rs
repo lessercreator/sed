@@ -64,6 +64,14 @@ pub const EQUIPMENT_LIST: &str = "
     ORDER BY tag
 ";
 
+pub const ELEMENTS_IN_REGION: &str = "
+    SELECT sm.source_table, sm.source_id
+    FROM spatial_idx si
+    JOIN spatial_map sm ON sm.spatial_id = si.id
+    WHERE si.x_min <= ?1 AND si.x_max >= ?2
+      AND si.y_min <= ?3 AND si.y_max >= ?4
+";
+
 pub const DUCT_SUMMARY_BY_SYSTEM: &str = "
     SELECT sys.tag, sys.name,
            COUNT(*) as segment_count,

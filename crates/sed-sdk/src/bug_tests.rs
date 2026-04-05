@@ -230,4 +230,57 @@ mod bug_tests {
             }
         }
     }
+
+    // =========================================================================
+    // TEST: Spatial index links back to real elements
+    // =========================================================================
+    #[test]
+    fn spatial_index_links_to_elements() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        drop(tmp);
+        crate::examples::create_skims_americana(&path).unwrap();
+        let doc = SedDocument::open(&path).unwrap();
+
+        // Every spatial_idx entry should have a matching spatial_map entry
+        let orphaned = doc.query_raw(
+            "SELECT COUNT(*) FROM spatial_idx si LEFT JOIN spatial_map sm ON si.id = sm.spatial_id WHERE sm.spatial_id IS NULL"
+        ).unwrap();
+        let count: i64 = orphaned[0][0].1.parse().unwrap();
+        assert_eq!(count, 0, "All spatial_idx entries should map to elements");
+
+        // spatial_map entries should point to real elements
+        let bad_spaces = doc.query_raw(
+            "SELECT COUNT(*) FROM spatial_map sm LEFT JOIN spaces s ON sm.source_id = s.id WHERE sm.source_table = 'spaces' AND s.id IS NULL"
+        ).unwrap();
+        assert_eq!(bad_spaces[0][0].1, "0", "All space references in spatial_map should be valid");
+
+        let bad_placements = doc.query_raw(
+            "SELECT COUNT(*) FROM spatial_map sm LEFT JOIN placements p ON sm.source_id = p.id WHERE sm.source_table = 'placements' AND p.id IS NULL"
+        ).unwrap();
+        assert_eq!(bad_placements[0][0].1, "0", "All placement references in spatial_map should be valid");
+    }
+
+    // =========================================================================
+    // TEST: Spatial query returns elements in a region
+    // =========================================================================
+    #[test]
+    fn spatial_query_finds_elements() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        drop(tmp);
+        crate::examples::create_skims_americana(&path).unwrap();
+        let doc = SedDocument::open(&path).unwrap();
+
+        // Query a region that should contain the Sales Area (center ~8, ~8.5)
+        let results = doc.query_raw(
+            "SELECT sm.source_table, sm.source_id FROM spatial_idx si JOIN spatial_map sm ON si.id = sm.spatial_id WHERE si.x_max >= 7.0 AND si.x_min <= 9.0 AND si.y_max >= 7.0 AND si.y_min <= 9.0"
+        ).unwrap();
+        assert!(!results.is_empty(), "Spatial query for center of building should find elements");
+
+        // Should find both spaces and placements
+        let tables: Vec<&str> = results.iter().map(|r| r[0].1.as_str()).collect();
+        assert!(tables.contains(&"spaces"), "Should find spaces in region");
+        assert!(tables.contains(&"placements"), "Should find placements in region");
+    }
 }
