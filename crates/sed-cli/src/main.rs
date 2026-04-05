@@ -15,6 +15,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Open a .sed file in the browser (generates interactive HTML viewer)
+    Open {
+        /// Path to .sed file
+        file: String,
+    },
     /// Show document summary
     Info {
         /// Path to .sed file
@@ -149,6 +154,14 @@ enum Commands {
         #[arg(short, long, default_value = "Level 1")]
         level: String,
     },
+    /// Export all levels as interactive HTML (opens in any browser)
+    ViewAll {
+        /// Path to .sed file
+        file: String,
+        /// Output HTML path
+        #[arg(short, long, default_value = "plan-all.html")]
+        output: String,
+    },
     /// Create a blank project with the default HVAC equipment catalog
     Catalog {
         /// Output path (default: catalog.sed)
@@ -174,6 +187,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Open { file } => {
+            let out = file.replace(".sed", ".html");
+            let doc = SedDocument::open(&file)?;
+            let levels: Vec<String> = doc.query_raw("SELECT DISTINCT level FROM spaces WHERE x IS NOT NULL ORDER BY level")?
+                .into_iter().filter_map(|r| if r[0].1 != "NULL" { Some(r[0].1.clone()) } else { None }).collect();
+            let level = levels.first().map(|s| s.as_str()).unwrap_or("Level 1");
+            html_export::export_html(&file, &out, level)?;
+            let _ = open::that(&out);
+            Ok(())
+        }
         Commands::Info { file } => cmd_info(&file),
         Commands::Query { file, sql } => cmd_query(&file, &sql),
         Commands::Report { file, name } => cmd_report(&file, &name),
@@ -209,6 +232,11 @@ fn main() -> Result<()> {
         }
         Commands::View { file, output, level } => {
             html_export::export_html(&file, &output, &level)?;
+            let _ = open::that(&output);
+            Ok(())
+        }
+        Commands::ViewAll { file, output } => {
+            html_export::export_html_all(&file, &output)?;
             let _ = open::that(&output);
             Ok(())
         }
